@@ -184,7 +184,7 @@ pub async fn run_l1_tool_chain(
             }
             ConsumeResult::PlanProposal { title, plan_markdown, estimated_turns } => {
                 tracing::info!(title = %title, turns = estimated_turns, "L1 chain → PlanProposal");
-                let plan = crate::web::ws_plans::save_pending_plan(session_id, &title, &plan_markdown, estimated_turns);
+                let plan = crate::web::ws_plans::save_pending_plan(&state.config.general.data_dir, session_id, &title, &plan_markdown, estimated_turns);
                 send_ws(sink.sender, "plan_proposal", &serde_json::json!({
                     "title": plan.title,
                     "plan_markdown": plan.plan_markdown,

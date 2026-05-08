@@ -8,6 +8,7 @@ pub mod llamacpp_embed;
 pub mod ollama;
 pub mod openai_compat;
 pub mod stream_parser;
+pub(crate) mod stream_parser_util;
 pub mod spiral_detector;
 
 use crate::config::AppConfig;

@@ -38,11 +38,12 @@ pub async fn enforce_context_budget(
         }
     };
 
-    // HEURISTIC: 60% safety margin reserves 40% of context for generation tokens.
+    // Context budget ratio: reserves 40% of context for generation tokens.
     // The model needs room to produce output. There is no API to predict generation
     // length, so this margin is the minimum viable reservation. Error margin: if the
     // model generates less than 40% of context, some budget is wasted (harmless).
-    let budget = (context_length as f64 * 0.60) as usize;
+    const CONTEXT_BUDGET_RATIO: f64 = 0.60;
+    let budget = (context_length as f64 * CONTEXT_BUDGET_RATIO) as usize;
 
     if token_count <= budget {
         return;
@@ -143,20 +144,28 @@ async fn trim_tool_messages(
     trimmed_total
 }
 
+/// Maximum characters before a tool result is compressed.
+/// Below this threshold, the full result is returned as-is.
+const COMPRESS_THRESHOLD_CHARS: usize = 8000;
+
+/// Characters to keep from the head and tail of a compressed tool result.
+const COMPRESS_HEAD_CHARS: usize = 2000;
+const COMPRESS_TAIL_CHARS: usize = 2000;
+
 /// Compress a tool result to preserve key content while reducing size.
-/// Keeps pagination markers, head/tail ~2000 chars, and section headings.
+/// Keeps pagination markers, head/tail content, and section headings.
 fn compress_tool_result(content: &str) -> String {
     let total_lines = content.lines().count();
     let total_chars = content.len();
 
-    if total_chars <= 8000 {
+    if total_chars <= COMPRESS_THRESHOLD_CHARS {
         return content.to_string();
     }
 
     let (pagination_header, bookmark) = extract_pagination_markers(content);
     let inner = strip_pagination(content, &pagination_header);
-    let head = extract_head(inner, 2000);
-    let tail = extract_tail(inner, &bookmark, 2000);
+    let head = extract_head(inner, COMPRESS_HEAD_CHARS);
+    let tail = extract_tail(inner, &bookmark, COMPRESS_TAIL_CHARS);
     let headings = extract_middle_headings(inner, head, tail);
 
     build_compressed_output(

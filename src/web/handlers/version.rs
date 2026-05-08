@@ -126,6 +126,13 @@ pub async fn rollback_version(
         _ => return Json(json!({"success": false, "error": "Missing 'hash' parameter"})),
     };
 
+    // §13.2: Validate git hash format — must be 7-40 hex chars only.
+    // Prevents shell injection via crafted hash values.
+    if hash.len() < 7 || hash.len() > 40 || !hash.chars().all(|c| c.is_ascii_hexdigit()) {
+        tracing::warn!(hash = %hash, "Rollback rejected: invalid git hash format");
+        return Json(json!({"success": false, "error": "Invalid git hash format — must be 7-40 hex characters"}));
+    }
+
     let root = std::env::current_dir().unwrap_or_default();
     tracing::info!(hash = %hash, "Version rollback: starting");
 

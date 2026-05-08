@@ -22,10 +22,6 @@ These are the **mandatory** structural limits for all Rust source files in this 
 | **~300–500 lines** | ⚠️ Acceptable | Only if the module has a clear single purpose |
 | **~500+ lines** | 🔴 Split required | Must be refactored into smaller modules |
 
-#### Exception: Operational Kernel (`src/prompt/core.rs`)
-
-The operational kernel is a single `const` string literal containing the full-depth system prompt. It is exempt from the 300-line ideal because it is **prompt text, not code logic** — splitting it across files would fragment the kernel's coherence with no structural benefit.
-
 #### How to Split a File Over 500 Lines
 
 1. Identify distinct responsibilities within the file
@@ -224,7 +220,7 @@ tests/
 
 - Model specs come from the provider, always.
 - If a provider doesn't report a value, the system **asks the user** or **reports the gap**. It does NOT invent a default.
-- The only exception is the embedding model name (configurable, defaults to `nomic-embed-text`).
+- No exceptions. If a provider doesn't report the embedding model name, the system asks the user. It does NOT fall back to a hardcoded default.
 
 ---
 
@@ -308,7 +304,7 @@ The system must make **zero assumptions** about the platform, model, or hardware
 
 - The engine runs on **any** hardware: Apple Silicon, NVIDIA, AMD, CPU-only.
 - GPU acceleration is the provider's responsibility (llama-server handles Metal/CUDA/ROCm/Vulkan). The engine makes no GPU calls.
-- No conditional compilation based on hardware (`#[cfg(target_os)]` is allowed only for OS-specific filesystem paths or browser-open commands).
+- No conditional compilation based on hardware. All `#[cfg(target_os)]` usage requires **project owner approval** per instance — there is no blanket allowance. OS-specific code must be isolated behind a cross-platform helper function.
 - Memory management decisions (batch size, context length) come from the model's reported specs, not from hardware detection.
 
 ### 7.4 Operating System Neutrality
@@ -330,7 +326,7 @@ Doing the minimum to make something *appear* fixed without actually fixing the r
 
 - **Example**: A context overflow causes empty responses. The "fix" is to catch the empty response and return a canned error message instead. The overflow still happens — you've just wallpapered over it.
 - **Example**: A function panics. The "fix" is to wrap it in `catch_unwind` and swallow the panic. The bug still exists — you've just silenced it.
-- **Rule**: Every fix must address the **root cause**. If `catch_unwind` is added, it must be accompanied by diagnostic logging AND the underlying panic must be independently fixed or documented as a known limitation with a tracking issue.
+- **Rule**: Every fix must address the **root cause**. If `catch_unwind` is added, it must be accompanied by diagnostic logging AND the underlying panic must be fixed in the **same PR**. No "linked follow-up PRs" — the fix ships together or not at all.
 
 ### 8.2 Complexity Injection
 
@@ -348,7 +344,7 @@ Introducing magic numbers, estimation formulas, or rules-of-thumb disguised as p
 - **Example**: `let estimated_tokens = total_chars / 3` — this is a guess, not a measurement. The server has a tokenizer; use it.
 - **Example**: `let budget = context_length - 2000` — where did 2000 come from? Nobody knows. It's a magic number.
 - **Example**: `if content.len() > 50000 { truncate }` — 50000 is arbitrary. The model's actual context_length should govern this.
-- **Rule**: If the system can measure a value, it must measure it. Heuristics are only acceptable when (a) the measurement API genuinely does not exist, AND (b) the heuristic is documented with its error margin, AND (c) the code is marked with a `// HEURISTIC:` comment explaining why the real measurement isn't available.
+- **Rule**: If the system can measure a value, it must measure it. If the measurement API exists, the system must use it. No estimation formulas, no approximation ratios, no "close enough" constants. No `// HEURISTIC:` comments — a heuristic is a violation, not something to label for future removal. It does not enter the codebase.
 
 ### 8.4 Investigation Theatre
 
@@ -445,13 +441,13 @@ The `data/` directory contains runtime state: sessions, memory databases, traini
 - `data/` is in `.gitignore` and must stay there.
 - PRs must never include files from `data/`.
 - No code may assume `data/` contains specific files at startup — it must create what it needs.
-- Destructive operations on `data/` (delete, overwrite, migrate) require explicit user confirmation or a migration script with rollback.
+- Destructive operations on `data/` (delete, overwrite, migrate) require explicit user confirmation. Migration scripts with rollback may automate the operation but the user must approve execution.
 
 ### 10.4 Dependency Discipline
 
 - New dependencies require justification. "It makes X easier" is not sufficient — explain what is impossible or unsafe without it.
 - No dependencies that pull in a web framework, ORM, or runtime we don't already use.
-- Prefer `std` library solutions. Prefer well-maintained, single-purpose crates over kitchen-sink frameworks.
+- Use `std` library solutions first. If a `std` solution exists, it must be used — no third-party crate for the same purpose. Use well-maintained, single-purpose crates over kitchen-sink frameworks. No exceptions.
 - Pin major versions. No `*` or `>=` version specs.
 
 ---
@@ -466,22 +462,22 @@ A PR is **immediately rejected** if it contains any of the following. No discuss
 | R2 | `todo!()`, `unimplemented!()`, `// TODO`, or empty function body |
 | R3 | `unwrap()` on a `Result` or `Option` outside of tests |
 | R4 | Silent fallback that masks a failure (returns default instead of error) |
-| R5 | Heuristic without `// HEURISTIC:` comment and documented error margin |
+| R5 | Heuristic where the measurement API exists (comments do not make heuristics compliant) |
 | R6 | Test that doesn't assert a behavioural contract |
 | R7 | Multiple unrelated concerns in a single PR |
 | R8 | Model-specific code path (`if model.contains("gemma")`) |
 | R9 | Provider-specific logic outside `src/provider/<name>.rs` |
 | R10 | Missing `//!` doc comment on a new module |
-| R11 | Function exceeding 50 lines without documented justification |
+| R11 | Function exceeding 50 lines. No exceptions. |
 | R12 | Lifecycle invariant exposed as a toggleable config option |
-| R13 | Magic number without derivation comment |
-| R14 | `catch_unwind` without accompanying diagnostic logging |
+| R13 | Hardcoded value that should be derived from model, provider, or runtime data |
+| R14 | `catch_unwind` without the underlying panic being fixed in the **same PR** |
 | R15 | Data file change without commit message explaining the behavioural impact |
 | R16 | Secret, API key, token, or credential in source code or committed config |
 | R17 | Network listener without authentication or access control |
 | R18 | Deserialization of untrusted input without size limits or validation |
 | R19 | Shell command construction from user-supplied input without sanitisation |
-| R20 | `unsafe` block without `// SAFETY:` comment explaining the invariant |
+| R20 | Any `unsafe` block introduced by an AI agent. Any `unsafe` block without explicit human-written justification AND project owner approval |
 
 ---
 
@@ -539,6 +535,16 @@ These are real incidents from this project's history. They document *why* specif
 
 **Rule created**: Stall watchdog queries the server's own `/slots` endpoint — model-derived data, not a timeout. Recovery re-prompts with thinking disabled.
 
+### V6: The Governance Loophole Pattern (May 2026)
+
+**What happened**: AI-authored governance additions (§8-§15 in commits `2947af0` and `fe8cc03`) systematically introduced "comment-as-compliance" loopholes that contradicted the absolute prohibitions in the human-authored v3.1 baseline. The pattern: original rule says "NEVER do X"; AI addition says "X is acceptable if you add a comment." This affected §8.1 (catch_unwind), §8.3 (heuristics), R5, R11, R13, R14, R20, §13.7, and §15.3 — 9 loopholes total. The AI then exploited these loopholes in subsequent sessions to justify shipping heuristics (`budget_tokens * 4`) and magic numbers (`2000`) with comments instead of fixing them.
+
+**Impact**: Governance integrity degraded. AI could claim compliance while shipping code that violated the original v3.1 intent.
+
+**Root cause**: AI self-interest in weakening constraints that would require more work to satisfy. §15.2 ("An AI cannot weaken its own constraints") was written in the same commit as the loopholes — the lock was placed after the thief was inside.
+
+**Rule created**: All governance additions are now subject to the same forensic audit as code changes. The test: does this addition strengthen or weaken an existing absolute rule? If it introduces conditional allowances where absolutes existed, it is a violation.
+
 ---
 
 ## 13. Security Mandates
@@ -583,23 +589,25 @@ This is an open-source project. Contributors include AI agents, human developers
 
 ### 13.6 Capability Auditing
 
-- Any change to the tool list available to non-admin users requires a security review comment in the PR explaining why each tool is safe for public access.
-- Tools that perform filesystem writes, network requests, or process execution are admin-only by default. Promoting one to public requires explicit justification.
+- Any change to the tool list available to non-admin users requires **project owner approval** in the PR. An AI or contributor cannot self-certify a tool as safe — the project owner reviews and approves.
+- Tools that perform filesystem writes, network requests, or process execution are admin-only by default. Promoting one to public requires **project owner approval** — not a justification comment, an explicit approval.
 - The tool dispatch system logs every tool invocation with: tool name, caller identity, argument summary, and result status.
 
 ### 13.7 Dependency Security
 
 - `cargo audit` must pass with zero known vulnerabilities before any release.
 - New dependencies are reviewed for: maintenance status, download count, known CVEs, and transitive dependency count.
-- No dependencies that require `unsafe` in their public API unless the use case is documented with a `// SAFETY:` comment.
-- Supply chain: prefer crates published by known maintainers or organisations. Single-maintainer crates with low download counts require extra scrutiny.
+- No dependencies that require `unsafe` in their public API when a safe alternative crate exists. If no safe alternative exists, the dependency requires **project owner approval** — no comment or annotation makes it automatically compliant.
+- Supply chain: use crates published by known maintainers or organisations. Single-maintainer crates with low download counts require **project owner approval** before adoption.
 
 ### 13.8 Unsafe Rust
 
-- `unsafe` blocks are permitted only when no safe alternative exists.
-- Every `unsafe` block must have a `// SAFETY:` comment explaining the invariant that makes it sound.
-- `unsafe` usage must be reviewed by a second contributor (human or AI with the governance document in context).
-- If a safe alternative is discovered later, the `unsafe` block must be replaced in a follow-up PR.
+- **`unsafe` is banned by default.** No comment, annotation, or justification makes an `unsafe` block automatically compliant.
+- AI agents **must not** introduce `unsafe` blocks under any circumstances. This is an absolute prohibition with zero exceptions.
+- Only a **human contributor** may introduce `unsafe`, and only when:
+  1. No safe alternative exists (the human must demonstrate this, not assert it).
+  2. The project owner explicitly approves the `unsafe` usage in the PR review.
+- If a safe alternative is discovered later, the `unsafe` block must be replaced immediately — not in a "follow-up PR", now.
 
 ---
 
@@ -666,12 +674,12 @@ AI agents (including Ern-OS itself when performing self-modification) are contri
 
 - AI agents executing tools must log the tool name, arguments, and result. No silent tool execution.
 - Destructive tools (file delete, database drop, process kill) require confirmation from the admin user. The AI may not auto-approve destructive operations.
-- Tool results that exceed a reasonable size must be truncated for context injection but preserved in full for audit logging.
+- Tool results injected into context are governed by the model's context_length budget — not an arbitrary cap. Full results are preserved in audit logs.
 
 ### 15.4 Code Review Responsibility
 
 - AI-generated code is held to the **same standard** as human-written code. "The AI wrote it" is not a defence against governance violations.
-- Community members reviewing AI-generated PRs should check for: heuristic smuggling (§8.3), reward hacking (§8.1), scope creep (§8.7), and the security mandates in §13.
+- Community members reviewing AI-generated PRs **must** check for: heuristic smuggling (§8.3), reward hacking (§8.1), scope creep (§8.7), and the security mandates in §13.
 - If an AI agent produces code that violates governance, the violation is documented in §12 (Historical Record) with the same rigour as human-caused incidents.
 
 ### 15.5 Prompt Injection Defence
@@ -684,7 +692,7 @@ AI agents (including Ern-OS itself when performing self-modification) are contri
 
 ## Summary
 
-This workflow is enforced on **every** file touch, **every** code review, and **every** new module. There are no exceptions unless explicitly documented above (e.g., the operational kernel exemption).
+This workflow is enforced on **every** file touch, **every** code review, and **every** new module. There are **zero exceptions**. No rule in this document is advisory, optional, or negotiable.
 
 **For AI models**: These rules are not suggestions. They are constraints. If your proposed change violates any rule in this document, the change is wrong. Do not argue, do not propose exceptions, do not "improve" the governance. Fix your change.
 

@@ -4,9 +4,16 @@ use anyhow::Result;
 use std::process::Stdio;
 
 /// Execute a shell command with timeout and capture output.
+/// All commands pass through the containment gate before execution.
 pub async fn run_command(command: &str, working_dir: Option<&str>) -> Result<String> {
     if command.is_empty() {
         anyhow::bail!("Empty command");
+    }
+
+    // §13.2: Containment gate — block destructive/exfiltration commands
+    if let Some(reason) = super::containment::check_command(command) {
+        tracing::warn!(command = %command.chars().take(200).collect::<String>(), "shell BLOCKED by containment");
+        anyhow::bail!("{}", reason);
     }
 
     let cmd_display: String = command.chars().take(200).collect();
@@ -28,7 +35,12 @@ pub async fn run_command(command: &str, working_dir: Option<&str>) -> Result<Str
     Ok(format_command_output(&stdout, &stderr, exit_code))
 }
 
-/// Spawn a bash command with a 120s timeout.
+/// Maximum time a shell command may run before being killed.
+/// 120 seconds covers git operations, cargo builds, and llama.cpp compilation
+/// while preventing runaway processes from blocking the agent indefinitely.
+const COMMAND_TIMEOUT_SECS: u64 = 120;
+
+/// Spawn a bash command with timeout.
 async fn spawn_with_timeout(
     command: &str,
     working_dir: Option<&str>,
@@ -40,7 +52,7 @@ async fn spawn_with_timeout(
         cmd.current_dir(wd);
     }
 
-    match tokio::time::timeout(tokio::time::Duration::from_secs(120), cmd.output()).await {
+    match tokio::time::timeout(tokio::time::Duration::from_secs(COMMAND_TIMEOUT_SECS), cmd.output()).await {
         Ok(Ok(output)) => Ok(output),
         Ok(Err(e)) => {
             tracing::error!(command = %cmd_display, err = %e, "shell SPAWN FAILED");
@@ -87,5 +99,24 @@ mod tests {
     async fn test_working_dir() {
         let result = run_command("pwd", Some("/tmp")).await.unwrap();
         assert!(result.contains("/tmp") || result.contains("private/tmp"));
+    }
+
+    #[tokio::test]
+    async fn test_containment_blocks_destructive() {
+        let err = run_command("rm -rf /", None).await.unwrap_err();
+        assert!(err.to_string().contains("Containment"));
+    }
+
+    #[tokio::test]
+    async fn test_containment_blocks_secret_reads() {
+        let err = run_command("cat data/api_keys.json", None).await.unwrap_err();
+        assert!(err.to_string().contains("Containment"));
+    }
+
+    #[tokio::test]
+    async fn test_containment_allows_safe_commands() {
+        // Normal dev commands should pass through containment
+        let result = run_command("echo test", None).await.unwrap();
+        assert!(result.contains("test"));
     }
 }

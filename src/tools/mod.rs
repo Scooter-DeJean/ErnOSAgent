@@ -18,6 +18,7 @@ pub mod file_extractor;
 pub mod file_read;
 pub mod file_write;
 pub mod browser_tool;
+pub(crate) mod browser_actions;
 pub mod artifact_tool;
 pub mod image_gen_tool;
 pub mod containment;

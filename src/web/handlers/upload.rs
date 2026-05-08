@@ -5,6 +5,9 @@ use axum::extract::Multipart;
 use axum::response::Json;
 use serde_json::json;
 
+/// Maximum upload size: 100 MB per file.
+const MAX_UPLOAD_BYTES: usize = 100 * 1024 * 1024;
+
 /// POST /api/upload — accept a file upload, save it, return the path.
 pub async fn upload_file(mut multipart: Multipart) -> Json<serde_json::Value> {
     let upload_dir = std::path::PathBuf::from("data/uploads");
@@ -38,6 +41,12 @@ async fn process_upload_field(
         Ok(d) => d,
         Err(e) => { tracing::warn!(err = %e, "Failed to read upload field"); return None; }
     };
+
+    // §13.2: Reject oversized uploads to prevent DoS
+    if data.len() > MAX_UPLOAD_BYTES {
+        tracing::warn!(filename = %filename, size = data.len(), limit = MAX_UPLOAD_BYTES, "Upload rejected: file too large");
+        return None;
+    }
 
     let ext = std::path::Path::new(&filename)
         .extension()

@@ -1,6 +1,7 @@
 //! Static content handlers — HTML, CSS, JS, vendor libs, and dynamically generated images.
 
-use axum::extract::Path;
+use crate::web::state::AppState;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
@@ -70,13 +71,13 @@ pub async fn vendor_katex_css() -> impl IntoResponse {
     ], include_str!("../static/vendor/katex.min.css"))
 }
 
-/// Serve generated images from `data/images/{filename}`.
-pub async fn serve_image(Path(filename): Path<String>) -> impl IntoResponse {
+/// Serve generated images from `{data_dir}/images/{filename}`.
+pub async fn serve_image(State(state): State<AppState>, Path(filename): Path<String>) -> impl IntoResponse {
     if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
         return (StatusCode::BAD_REQUEST, "Invalid filename".to_string()).into_response();
     }
 
-    let path = std::path::PathBuf::from("data/images").join(&filename);
+    let path = state.config.general.data_dir.join("images").join(&filename);
     match tokio::fs::read(&path).await {
         Ok(bytes) => {
             let content_type = if filename.ends_with(".png") {

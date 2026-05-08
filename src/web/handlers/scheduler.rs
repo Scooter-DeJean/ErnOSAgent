@@ -65,7 +65,9 @@ fn parse_schedule(body: &serde_json::Value) -> Result<crate::scheduler::job::Job
                 .map_err(|_| "Invalid datetime for once schedule".to_string())
         }
         _ => {
-            let secs = body["schedule_value"].as_u64().unwrap_or(300);
+            /// Default scheduler interval in seconds (5 minutes).
+            const DEFAULT_INTERVAL_SECS: u64 = 300;
+            let secs = body["schedule_value"].as_u64().unwrap_or(DEFAULT_INTERVAL_SECS);
             Ok(crate::scheduler::job::JobSchedule::Interval(secs))
         }
     }
@@ -84,7 +86,13 @@ fn parse_task(body: &serde_json::Value) -> crate::scheduler::job::JobTask {
         }
         Some("custom") => {
             let cmd = body["custom_command"].as_str().unwrap_or("echo ok").to_string();
-            JobTask::Custom(cmd)
+            // §13.2: Containment gate — block dangerous custom commands
+            if let Some(reason) = crate::tools::containment::check_command(&cmd) {
+                tracing::warn!(cmd = %cmd, reason = %reason, "Scheduler: custom command BLOCKED by containment");
+                JobTask::Custom(format!("echo 'BLOCKED: {}'", reason.replace('\'', "\\'")))
+            } else {
+                JobTask::Custom(cmd)
+            }
         }
         _ => JobTask::Custom("echo 'unknown task type'".to_string()),
     }

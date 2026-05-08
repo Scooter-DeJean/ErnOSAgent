@@ -5,6 +5,13 @@ use std::path::Path;
 
 pub async fn execute(args: &serde_json::Value) -> Result<String> {
     let path = args["path"].as_str().context("file_write requires 'path'")?;
+
+    // §13.2: Containment gate — block writes to protected files
+    if let Some(reason) = super::containment::check_path(path) {
+        tracing::warn!(path = %path, "file_write BLOCKED by containment");
+        anyhow::bail!("{}", reason);
+    }
+
     let content = args["content"].as_str().context("file_write requires 'content'")?;
 
     tracing::info!(path = %path, content_len = content.len(), "file_write START");

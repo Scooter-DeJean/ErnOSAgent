@@ -4,7 +4,7 @@
 //! Axum web server — thin router orchestrator. Handlers live in `handlers/`.
 
 use crate::web::state::AppState;
-use crate::web::handlers::{system, sessions, memory, scheduler, onboarding, api_keys, agents, content, tts, codes, platforms, platform_ingest, platform_stream, voice, video, upload, version, checkpoint, planning, models_hub, curriculum};
+use crate::web::handlers::{system, system_interp, sessions, memory, scheduler, onboarding, api_keys, agents, content, tts, codes, platforms, platform_ingest, platform_stream, voice, video, upload, version, checkpoint, planning, models_hub, curriculum};
 use anyhow::Result;
 use axum::{Router, routing::{get, post, put, delete}};
 use tower_http::cors::CorsLayer;
@@ -99,20 +99,20 @@ fn system_routes() -> Router<AppState> {
         .route("/api/factory-reset", post(system::factory_reset))
         .route("/api/tools", get(system::tools_catalog))
         .route("/api/training", get(system::training_buffers))
-        .route("/api/interpretability/features", get(system::interp_features))
-        .route("/api/interpretability/snapshots", get(system::interp_snapshots))
-        .route("/api/interpretability/live", get(system::interp_live))
-        .route("/api/interpretability/sae", get(system::interp_sae))
-        .route("/api/steering/vectors", get(system::steering_vectors))
-        .route("/api/learning/status", get(system::learning_status))
-        .route("/api/learning/adapters", get(system::learning_adapters))
-        .route("/api/learning/sleep-history", get(system::learning_sleep_history))
+        .route("/api/interpretability/features", get(system_interp::interp_features))
+        .route("/api/interpretability/snapshots", get(system_interp::interp_snapshots))
+        .route("/api/interpretability/live", get(system_interp::interp_live))
+        .route("/api/interpretability/sae", get(system_interp::interp_sae))
+        .route("/api/steering/vectors", get(system_interp::steering_vectors))
+        .route("/api/learning/status", get(system_interp::learning_status))
+        .route("/api/learning/adapters", get(system_interp::learning_adapters))
+        .route("/api/learning/sleep-history", get(system_interp::learning_sleep_history))
         .route("/api/curriculum", get(curriculum::list_courses))
         .route("/api/curriculum", post(curriculum::add_course))
         .route("/api/curriculum/{id}/progress", get(curriculum::course_progress))
         .route("/api/curriculum/review", get(curriculum::review_stats))
         .route("/api/curriculum/{id}", delete(curriculum::remove_course))
-        .route("/api/observer/history", get(system::observer_history))
+        .route("/api/observer/history", get(system_interp::observer_history))
         .route("/api/logs", get(system::logs_recent))
         .route("/api/self-edits", get(system::self_edits))
         .route("/api/checkpoints", get(system::checkpoints))

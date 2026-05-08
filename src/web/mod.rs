@@ -1,6 +1,7 @@
 // Ern-OS — Web server module declarations
 pub mod server;
 pub mod ws;
+pub(crate) mod ws_resume;
 pub mod ws_l1;
 pub mod ws_learning;
 pub mod ws_stream;

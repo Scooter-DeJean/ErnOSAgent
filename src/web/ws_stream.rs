@@ -73,9 +73,10 @@ pub async fn audit_and_retry(
                 ).await;
             }
             Err(e) => {
-                // Infrastructure error — fail-open (observer itself is down)
-                tracing::warn!(error = %e, "Observer failed — fail-open");
-                return current_text;
+                // §4: Fail-CLOSED — observer down means response blocked.
+                // Return error message instead of the unaudited response.
+                tracing::error!(error = %e, "Observer failed — fail-CLOSED (response blocked)");
+                return "[Observer infrastructure error — response blocked. Please retry.]".to_string();
             }
         }
     }

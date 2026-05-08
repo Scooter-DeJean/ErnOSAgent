@@ -21,7 +21,9 @@ fn log_edit(data_dir: &Path, action: &str, path: &str, detail: &str) {
     let log_path = data_dir.join("self_edit_log.jsonl");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
         use std::io::Write;
-        let _ = writeln!(f, "{}", entry);
+        if let Err(e) = writeln!(f, "{}", entry) {
+            tracing::error!(error = %e, "Failed to append self-edit log");
+        }
     }
 }
 

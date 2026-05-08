@@ -68,9 +68,11 @@ pub fn xml_tag_content(text: &str, tag: &str) -> String {
 // ── Tier 1: Brave Search API ──
 
 pub async fn brave_search(client: &reqwest::Client, query: &str, api_key: &str) -> Result<String, String> {
+    /// Number of search results to request from the Brave API.
+    const BRAVE_RESULT_COUNT: u8 = 10;
     let url = format!(
-        "https://api.search.brave.com/res/v1/web/search?q={}&count=10&text_decorations=false",
-        urlencoding::encode(query)
+        "https://api.search.brave.com/res/v1/web/search?q={}&count={}&text_decorations=false",
+        urlencoding::encode(query), BRAVE_RESULT_COUNT
     );
     let resp = client.get(&url)
         .header("Accept", "application/json").header("Accept-Encoding", "gzip")

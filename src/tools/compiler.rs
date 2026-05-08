@@ -231,7 +231,9 @@ async fn write_changelog(root: &PathBuf) {
     let log_path = root.join("data/recompile_log.md");
     let existing = std::fs::read_to_string(&log_path)
         .unwrap_or_else(|_| "# Self-Recompilation Log\n".to_string());
-    let _ = std::fs::write(&log_path, format!("{}{}", existing, entry));
+    if let Err(e) = std::fs::write(&log_path, format!("{}{}", existing, entry)) {
+        tracing::error!(error = %e, path = %log_path.display(), "Failed to write recompile changelog");
+    }
     tracing::info!("Changelog written");
 }
 
@@ -243,10 +245,12 @@ fn write_resume_state(root: &PathBuf, session_id: &str, platform: &str) {
         "session_id": session_id,
         "platform": platform,
     });
-    let _ = std::fs::write(
+    if let Err(e) = std::fs::write(
         root.join("data/resume.json"),
         serde_json::to_string_pretty(&resume).unwrap_or_default(),
-    );
+    ) {
+        tracing::error!(error = %e, "Failed to write resume state");
+    }
     tracing::info!(session_id, platform, "Resume state saved with session context");
 }
 
@@ -260,7 +264,9 @@ fn write_activity_log(root: &PathBuf) {
     let path = root.join("data/activity.jsonl");
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         use std::io::Write;
-        let _ = writeln!(f, "{}", entry);
+        if let Err(e) = writeln!(f, "{}", entry) {
+            tracing::error!(error = %e, "Failed to append activity log");
+        }
     }
     tracing::info!("Activity logged");
 }

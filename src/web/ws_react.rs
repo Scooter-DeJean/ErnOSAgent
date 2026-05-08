@@ -223,9 +223,9 @@ async fn run_observer_audit(
             false
         }
         Err(e) => {
-            // Infrastructure error — fail-open (observer itself is down)
-            tracing::warn!(error = %e, "Observer failed — fail-open");
-            true
+            // §4: Fail-CLOSED — observer down means response cannot be approved
+            tracing::error!(error = %e, "Observer failed — fail-CLOSED (response blocked)");
+            false
         }
     }
 }

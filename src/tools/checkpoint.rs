@@ -34,7 +34,9 @@ impl CheckpointManager {
     /// Create a new manager at the default location.
     pub fn new(data_dir: &Path) -> Self {
         let checkpoint_dir = data_dir.join("checkpoints");
-        let _ = std::fs::create_dir_all(&checkpoint_dir);
+        if let Err(e) = std::fs::create_dir_all(&checkpoint_dir) {
+            tracing::error!(error = %e, dir = %checkpoint_dir.display(), "Failed to create checkpoint dir");
+        }
         Self { checkpoint_dir }
     }
 
@@ -102,7 +104,9 @@ impl CheckpointManager {
                 .unwrap_or(true);
 
             if !keep {
-                let _ = std::fs::remove_file(&entry.snapshot_path);
+                if let Err(e) = std::fs::remove_file(&entry.snapshot_path) {
+                    tracing::warn!(error = %e, path = %entry.snapshot_path, "Failed to remove pruned snapshot");
+                }
                 pruned += 1;
             }
             keep
@@ -128,7 +132,9 @@ impl CheckpointManager {
     fn save_registry(&self, registry: &CheckpointRegistry) {
         let path = self.registry_path();
         if let Ok(json) = serde_json::to_string_pretty(registry) {
-            let _ = std::fs::write(&path, json);
+            if let Err(e) = std::fs::write(&path, json) {
+                tracing::error!(error = %e, path = %path.display(), "Failed to save checkpoint registry");
+            }
         }
     }
 }

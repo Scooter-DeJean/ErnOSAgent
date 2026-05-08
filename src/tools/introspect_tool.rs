@@ -222,7 +222,9 @@ pub fn log_reasoning_event(
     event: &serde_json::Value, thinking: Option<&str>,
 ) {
     let dir = data_dir.join("reasoning");
-    let _ = std::fs::create_dir_all(&dir);
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        tracing::error!(error = %e, dir = %dir.display(), "Failed to create reasoning log dir");
+    }
     let path = dir.join(format!("{}.jsonl", session_id));
 
     let mut entry = event.clone();
@@ -240,11 +242,12 @@ pub fn log_reasoning_event(
             .and_then(|mut f| { use std::io::Write; f.write_all(line.as_bytes()) });
     }
 
-    // HEURISTIC: Prune entries older than 1 hour. The 1-hour window matches the
-    // user requirement for "last hour" reasoning access. The 50-entry threshold
+    // Prune entries older than 1 hour. The 1-hour window matches the
+    // user requirement for "last hour" reasoning access. The threshold
     // avoids rewriting the file on every single write. Error margin: entries
     // may persist up to 1 write past the 1-hour boundary.
-    prune_old_entries(&path, 50);
+    const PRUNE_ENTRY_THRESHOLD: usize = 50;
+    prune_old_entries(&path, PRUNE_ENTRY_THRESHOLD);
 }
 
 /// Remove entries older than 1 hour from a JSONL reasoning log.
@@ -271,7 +274,9 @@ fn prune_old_entries(path: &Path, min_entries: usize) {
     let pruned = lines.len() - kept.len();
     if pruned > 0 {
         tracing::debug!(pruned, remaining = kept.len(), "Pruned old reasoning entries");
-        let _ = std::fs::write(path, kept.join("\n") + "\n");
+        if let Err(e) = std::fs::write(path, kept.join("\n") + "\n") {
+            tracing::warn!(error = %e, "Failed to write pruned reasoning log");
+        }
     }
 }
 

@@ -88,17 +88,50 @@ impl Provider for OllamaProvider {
             body["tools"] = tools.clone();
         }
 
-        let response = self.client.post(&url).json(&body).send().await
-            .context("Failed to connect to Ollama")?;
-
-        let (tx, rx) = mpsc::channel(256);
-        tokio::spawn(async move {
-            if let Err(e) = stream_parser::parse_sse_stream(response, tx.clone(), None).await {
-                let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+        // Retry on transient connection errors (connection reset/closed/refused)
+        // Matches retry policy in llamacpp.rs per §9.2.
+        const MAX_RETRIES: u32 = 3;
+        let mut last_err = None;
+        for attempt in 0..=MAX_RETRIES {
+            if attempt > 0 {
+                let delay = std::time::Duration::from_millis(500 * (1 << (attempt - 1)));
+                tracing::warn!(
+                    attempt, delay_ms = delay.as_millis() as u64,
+                    "Retrying Ollama request after connection error"
+                );
+                tokio::time::sleep(delay).await;
             }
-        });
 
-        Ok(rx)
+            match self.client.post(&url).json(&body).send().await {
+                Ok(response) => {
+                    if attempt > 0 {
+                        tracing::info!(attempt, "Ollama request succeeded after retry");
+                    }
+                    let (tx, rx) = mpsc::channel(256);
+                    tokio::spawn(async move {
+                        if let Err(e) = stream_parser::parse_sse_stream(response, tx.clone(), None).await {
+                            let _ = tx.send(StreamEvent::Error(e.to_string())).await;
+                        }
+                    });
+                    return Ok(rx);
+                }
+                Err(e) => {
+                    let is_transient = e.is_connect() || e.is_timeout()
+                        || e.to_string().contains("connection reset")
+                        || e.to_string().contains("connection closed");
+                    if is_transient && attempt < MAX_RETRIES {
+                        tracing::warn!(
+                            attempt, error = %e,
+                            "Ollama connection error (will retry)"
+                        );
+                        last_err = Some(e);
+                        continue;
+                    }
+                    return Err(e).context("Failed to connect to Ollama");
+                }
+            }
+        }
+        Err(last_err.map(|e| anyhow::anyhow!(e)).unwrap_or_else(|| anyhow::anyhow!("Ollama retries exhausted")))
     }
 
     async fn chat_sync(

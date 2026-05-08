@@ -73,7 +73,17 @@ pub async fn list_models() -> impl IntoResponse {
     Json(serde_json::json!({ "models": models }))
 }
 
-pub async fn factory_reset(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn factory_reset(
+    headers: axum::http::HeaderMap,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    // §13.5: Destructive operations require explicit confirmation header
+    if headers.get("x-confirm-destructive").and_then(|v| v.to_str().ok()) != Some("true") {
+        return Json(serde_json::json!({
+            "error": "Factory reset requires X-Confirm-Destructive: true header",
+            "hint": "This is a destructive operation that wipes all memory and sessions."
+        }));
+    }
     tracing::warn!("FACTORY RESET initiated via WebUI");
 
     { let mut memory = state.memory.write().await; memory.clear(); }
@@ -84,21 +94,22 @@ pub async fn factory_reset(State(state): State<AppState>) -> impl IntoResponse {
         for id in ids { let _ = sessions.delete(&id); }
     }
 
-    let _ = std::fs::write("data/golden_buffer.json", "[]");
-    let _ = std::fs::write("data/rejection_buffer.json", "[]");
-    let _ = std::fs::remove_dir_all("data/timeline");
-    let _ = std::fs::create_dir_all("data/timeline");
+    let dd = &state.config.general.data_dir;
+    let _ = std::fs::write(dd.join("golden_buffer.json"), "[]");
+    let _ = std::fs::write(dd.join("rejection_buffer.json"), "[]");
+    let _ = std::fs::remove_dir_all(dd.join("timeline"));
+    let _ = std::fs::create_dir_all(dd.join("timeline"));
     // Reset onboarding so the welcome flow triggers again
-    let _ = std::fs::remove_file("data/user_profile.json");
+    let _ = std::fs::remove_file(dd.join("user_profile.json"));
     // Clear observer and sleep history
-    let _ = std::fs::remove_file("data/observer_history.json");
-    let _ = std::fs::remove_file("data/sleep_history.json");
+    let _ = std::fs::remove_file(dd.join("observer_history.json"));
+    let _ = std::fs::remove_file(dd.join("sleep_history.json"));
 
     // Restore default prompts from prompts/ (factory defaults) → data/prompts/ (runtime)
     // The user's identity gets re-customized via the onboarding flow after reset.
     let defaults_dir = std::path::Path::new("prompts");
-    let runtime_dir = std::path::Path::new("data/prompts");
-    let _ = std::fs::create_dir_all(runtime_dir);
+    let runtime_dir = dd.join("prompts");
+    let _ = std::fs::create_dir_all(&runtime_dir);
     for name in &["core.md", "identity.md", "observer.md"] {
         let src = defaults_dir.join(name);
         let dst = runtime_dir.join(name);
@@ -119,155 +130,18 @@ pub async fn tools_catalog() -> impl IntoResponse {
 }
 
 pub async fn training_buffers(State(state): State<AppState>) -> impl IntoResponse {
-    let golden: Vec<serde_json::Value> = std::fs::read_to_string("data/golden_buffer.json")
+    let dd = &state.config.general.data_dir;
+    let golden: Vec<serde_json::Value> = std::fs::read_to_string(dd.join("golden_buffer.json"))
         .ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let rejections: Vec<serde_json::Value> = std::fs::read_to_string("data/rejection_buffer.json")
+    let rejections: Vec<serde_json::Value> = std::fs::read_to_string(dd.join("rejection_buffer.json"))
         .ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    let _ = state;
     Json(serde_json::json!({
         "golden": { "count": golden.len(), "entries": golden },
         "rejections": { "count": rejections.len(), "entries": rejections },
     }))
 }
 
-pub async fn interp_features() -> impl IntoResponse {
-    let features = crate::interpretability::features::labeled_features();
-    let entries: Vec<serde_json::Value> = features.iter().map(|f| {
-        serde_json::json!({
-            "index": f.index, "label": f.label,
-            "category": f.category, "baseline_activation": f.baseline_activation,
-        })
-    }).collect();
-    Json(serde_json::json!({ "count": entries.len(), "features": entries }))
-}
-
-pub async fn interp_snapshots() -> impl IntoResponse {
-    let dir = std::path::Path::new("data/snapshots");
-    let mut snapshots = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        let mut paths: Vec<_> = entries.flatten()
-            .filter(|e| e.path().extension().map_or(false, |ext| ext == "json"))
-            .collect();
-        paths.sort_by_key(|e| std::cmp::Reverse(e.file_name()));
-        for entry in paths.iter().take(50) {
-            if let Ok(content) = std::fs::read_to_string(entry.path()) {
-                if let Ok(snap) = serde_json::from_str::<serde_json::Value>(&content) {
-                    snapshots.push(serde_json::json!({ "file": entry.file_name().to_string_lossy(), "data": snap }));
-                }
-            }
-        }
-    }
-    Json(serde_json::json!({ "count": snapshots.len(), "snapshots": snapshots }))
-}
-
-pub async fn interp_live(State(state): State<AppState>) -> impl IntoResponse {
-    let monitor = state.live_monitor.read().await;
-    let averages = monitor.averages();
-    let features = crate::interpretability::features::labeled_features();
-
-    let entries: Vec<serde_json::Value> = averages.iter().map(|(idx, avg)| {
-        let label = features.iter().find(|f| f.index == *idx)
-            .map(|f| f.label.clone())
-            .unwrap_or_else(|| format!("feature_{}", idx));
-        let category = features.iter().find(|f| f.index == *idx)
-            .map(|f| f.category.clone())
-            .unwrap_or_else(|| "unknown".to_string());
-        serde_json::json!({
-            "index": idx,
-            "label": label,
-            "category": category,
-            "average_activation": avg,
-        })
-    }).collect();
-
-    Json(serde_json::json!({
-        "window_size": monitor.window_len(),
-        "feature_count": entries.len(),
-        "features": entries,
-    }))
-}
-
-pub async fn interp_sae(State(state): State<AppState>) -> impl IntoResponse {
-    let sae = state.sae.read().await;
-    let (input_dim, hidden_dim, model_loaded) = match sae.as_ref() {
-        Some(s) => (s.model_dim, s.num_features, true),
-        None => {
-            let c = crate::interpretability::trainer::TrainConfig::default();
-            (c.model_dim, c.num_features, false)
-        }
-    };
-    let config = crate::interpretability::trainer::TrainConfig::default();
-    Json(serde_json::json!({
-        "input_dim": input_dim,
-        "hidden_dim": hidden_dim,
-        "sparsity_coefficient": config.l1_coefficient,
-        "architecture": "JumpReLU",
-        "model_loaded": model_loaded,
-        "feature_count": crate::interpretability::features::labeled_features().len(),
-    }))
-}
-
-pub async fn steering_vectors() -> impl IntoResponse {
-    let dir = std::path::Path::new("data/steering");
-    match crate::steering::vectors::VectorStore::new(dir) {
-        Ok(s) => {
-            let vectors: Vec<serde_json::Value> = s.list().iter().map(|v| {
-                serde_json::json!({
-                    "name": v.name, "path": v.path, "strength": v.strength,
-                    "active": v.active, "description": v.description,
-                })
-            }).collect();
-            let active_count = s.active_vectors().len();
-            Json(serde_json::json!({ "count": vectors.len(), "active_count": active_count, "vectors": vectors }))
-        }
-        Err(_) => Json(serde_json::json!({ "count": 0, "active_count": 0, "vectors": [] })),
-    }
-}
-
-pub async fn learning_status(State(state): State<AppState>) -> impl IntoResponse {
-    let golden_count = state.golden_buffer.read().await.count();
-    let rejection_count = state.rejection_buffer.read().await.count();
-    let adapter_dir = std::path::Path::new("data/adapters");
-    let adapter_count = crate::learning::lora::adapters::AdapterStore::new(adapter_dir)
-        .map(|s| s.count()).unwrap_or(0);
-    let sleep_count: usize = std::fs::read_to_string("data/sleep_history.json")
-        .ok().and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
-        .map(|v| v.len()).unwrap_or(0);
-    Json(serde_json::json!({
-        "golden_buffer_size": golden_count, "rejection_buffer_size": rejection_count,
-        "adapter_count": adapter_count, "sleep_cycles": sleep_count,
-        "supported_methods": ["SFT", "ORPO", "SimPO", "KTO", "DPO", "GRPO"],
-    }))
-}
-
-pub async fn learning_adapters() -> impl IntoResponse {
-    let dir = std::path::Path::new("data/adapters");
-    match crate::learning::lora::adapters::AdapterStore::new(dir) {
-        Ok(store) => {
-            let adapters: Vec<serde_json::Value> = store.list().iter().map(|a| {
-                serde_json::json!({
-                    "id": a.id, "name": a.name, "method": a.method,
-                    "path": a.path, "created_at": a.created_at.to_rfc3339(),
-                    "param_count": a.param_count,
-                })
-            }).collect();
-            Json(serde_json::json!({ "count": adapters.len(), "adapters": adapters }))
-        }
-        Err(_) => Json(serde_json::json!({ "count": 0, "adapters": [] })),
-    }
-}
-
-pub async fn learning_sleep_history() -> impl IntoResponse {
-    let entries: Vec<serde_json::Value> = std::fs::read_to_string("data/sleep_history.json")
-        .ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    Json(serde_json::json!({ "count": entries.len(), "entries": entries }))
-}
-
-pub async fn observer_history() -> impl IntoResponse {
-    let entries: Vec<serde_json::Value> = std::fs::read_to_string("data/observer_history.json")
-        .ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
-    Json(serde_json::json!({ "count": entries.len(), "entries": entries }))
-}
+// Interpretability, learning, and steering handlers moved to system_interp.rs (§10.1).
 
 pub async fn logs_recent() -> impl IntoResponse {
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -471,7 +345,16 @@ pub async fn stop_inference(State(state): State<AppState>) -> impl IntoResponse 
 
 /// POST /api/shutdown — Graceful engine shutdown.
 /// Disconnects all platforms before halting.
-pub async fn shutdown_engine(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn shutdown_engine(
+    headers: axum::http::HeaderMap,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    // §13.5: Destructive operations require explicit confirmation header
+    if headers.get("x-confirm-destructive").and_then(|v| v.to_str().ok()) != Some("true") {
+        return Json(serde_json::json!({
+            "error": "Shutdown requires X-Confirm-Destructive: true header"
+        }));
+    }
     tracing::warn!("SHUTDOWN requested via /api/shutdown — disconnecting platforms");
     {
         let mut reg = state.platforms.write().await;

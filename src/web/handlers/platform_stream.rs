@@ -262,7 +262,7 @@ async fn run_streaming_pipeline(
             }
         }
         ConsumeResult::PlanProposal { title, plan_markdown, estimated_turns } => {
-            emit_plan(&session_id, &title, &plan_markdown, estimated_turns, &tx).await;
+            emit_plan(&state.config.general.data_dir, &session_id, &title, &plan_markdown, estimated_turns, &tx).await;
         }
         ConsumeResult::ToolCall { id, name, arguments } => {
             emit_tool_chain(&state, provider, &mut messages, &tools, &msg, &session_id, id, name, arguments, &tx).await;
@@ -338,10 +338,11 @@ async fn emit_reply(
 }
 
 async fn emit_plan(
+    data_dir: &std::path::Path,
     session_id: &str, title: &str, plan_md: &str, turns: usize,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
-    let plan = crate::web::ws_plans::save_pending_plan(session_id, title, plan_md, turns);
+    let plan = crate::web::ws_plans::save_pending_plan(data_dir, session_id, title, plan_md, turns);
     let _ = emit(tx, "plan", &serde_json::json!({
         "title": plan.title, "plan_markdown": plan.plan_markdown,
     })).await;

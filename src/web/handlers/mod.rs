@@ -1,6 +1,7 @@
 //! Handler submodules — each focused on a single API concern.
 
 pub mod system;
+pub mod system_interp;
 pub mod sessions;
 pub mod memory;
 pub mod scheduler;

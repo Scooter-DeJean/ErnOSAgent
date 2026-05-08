@@ -123,7 +123,7 @@ async fn process_voice_turn(
     session_id: &str,
 ) -> anyhow::Result<(String, String, Option<Vec<u8>>)> {
     // Save audio temporarily
-    let audio_dir = std::path::PathBuf::from("data/voice");
+    let audio_dir = state.config.general.data_dir.join("voice");
     std::fs::create_dir_all(&audio_dir).ok();
     let audio_file = audio_dir.join(format!("{}.wav", uuid::Uuid::new_v4()));
     std::fs::write(&audio_file, audio_data)?;

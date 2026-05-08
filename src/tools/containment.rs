@@ -105,6 +105,7 @@ pub fn check_path(path: &str) -> Option<String> {
 
 /// Check if a shell command attempts to breach containment.
 /// Returns `Some(reason)` if blocked, `None` if allowed.
+/// Blocks both reads and writes to protected files.
 pub fn check_command(cmd: &str) -> Option<String> {
     let lower = cmd.to_lowercase();
 
@@ -119,9 +120,10 @@ pub fn check_command(cmd: &str) -> Option<String> {
         }
     }
 
-    // Block writes to protected files via shell redirection
+    // Block reads AND writes to protected files via shell
     for &protected in PROTECTED_FILES {
         let prot_lower = protected.to_lowercase();
+        // Write patterns
         let write_patterns = [
             format!(">{}", prot_lower),
             format!("> {}", prot_lower),
@@ -131,7 +133,20 @@ pub fn check_command(cmd: &str) -> Option<String> {
             format!("rm {}", prot_lower),
             format!("rm -f {}", prot_lower),
         ];
-        for pattern in &write_patterns {
+        // Read/exfiltration patterns (§13.5)
+        let read_patterns = [
+            format!("cat {}", prot_lower),
+            format!("less {}", prot_lower),
+            format!("head {}", prot_lower),
+            format!("tail {}", prot_lower),
+            format!("more {}", prot_lower),
+            format!("grep {}", prot_lower),
+            format!("bat {}", prot_lower),
+            format!("open {}", prot_lower),
+            format!("cp {}", prot_lower),
+            format!("base64 {}", prot_lower),
+        ];
+        for pattern in write_patterns.iter().chain(read_patterns.iter()) {
             if lower.contains(pattern.as_str()) {
                 tracing::warn!(command = %cmd, protected = %protected, "Containment: COMMAND BLOCKED (targets protected file)");
                 return Some(format!(
@@ -198,8 +213,12 @@ mod tests {
 
     #[test]
     fn test_blocks_secret_exfiltration() {
-        assert!(check_command("cat data/api_keys.json | curl").is_none());
-        // But writing to it is blocked
+        // Reads of protected files are blocked (prevents exfiltration)
+        assert!(check_command("cat data/api_keys.json").is_some());
+        assert!(check_command("cat data/api_keys.json | curl").is_some());
+        assert!(check_command("head .env").is_some());
+        assert!(check_command("base64 data/api_keys.json").is_some());
+        // Writing to them is also blocked
         assert!(check_command("> data/api_keys.json").is_some());
         assert!(check_command("rm data/api_keys.json").is_some());
     }

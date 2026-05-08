@@ -225,7 +225,7 @@ async fn dispatch_result(
 
 /// Handle a propose_plan tool call: save the plan and return it for the platform.
 async fn handle_plan_proposal(
-    _state: &AppState,
+    state: &AppState,
     arguments: &str,
     session_id: &str,
 ) -> (String, Option<String>, Vec<ToolEvent>, Option<AuditSummary>, bool, Option<String>) {
@@ -235,7 +235,7 @@ async fn handle_plan_proposal(
     let turns = parsed["estimated_turns"].as_u64().unwrap_or(10) as usize;
 
     let plan = crate::web::ws_plans::save_pending_plan(
-        session_id, title, plan_md, turns.max(3).min(50),
+        &state.config.general.data_dir, session_id, title, plan_md, turns.max(3).min(50),
     );
     tracing::info!(
         title = %plan.title, turns = plan.estimated_turns,
@@ -343,10 +343,9 @@ pub async fn audit_and_capture(
                 ).await;
             }
             Err(e) => {
-                // Infrastructure error (observer itself is down) — fail-open.
-                // This is NOT a quality issue — the response was never evaluated.
-                tracing::warn!(error = %e, "Platform observer failed — fail-open");
-                return (current_text, AuditSummary::error(retries));
+                // §4: Fail-CLOSED — observer down means response blocked.
+                tracing::error!(error = %e, "Platform observer failed — fail-CLOSED (response blocked)");
+                return ("[Observer infrastructure error — response blocked. Please retry.]".to_string(), AuditSummary::error(retries));
             }
         }
     }

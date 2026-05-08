@@ -81,6 +81,14 @@ pub async fn save_keys(
     match serde_json::to_string_pretty(&keys) {
         Ok(json) => match std::fs::write(&path, &json) {
             Ok(_) => {
+                // §13.4: Restrict file permissions to owner-only (0600)
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)) {
+                        tracing::warn!(error = %e, "Failed to set API keys file permissions");
+                    }
+                }
                 tracing::info!(path = %path.display(), count = keys.len(), "API keys saved");
                 Json(serde_json::json!({ "ok": true }))
             }

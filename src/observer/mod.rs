@@ -79,15 +79,16 @@ pub struct AuditResult {
 }
 
 impl AuditResult {
-    /// Create an infrastructure-error pass-through result (fail-open).
+    /// Create an infrastructure-error result (fail-CLOSED per §4).
+    /// When the observer is down, responses must NOT pass through unaudited.
     pub fn infrastructure_error(error: &str) -> Self {
         Self {
-            verdict: Verdict::Allowed,
+            verdict: Verdict::Blocked,
             confidence: 0.0,
             failure_category: "infrastructure_error".to_string(),
             what_worked: String::new(),
             what_went_wrong: format!("Observer unavailable: {}", error),
-            how_to_fix: String::new(),
+            how_to_fix: "Observer infrastructure must be restored before responses can be delivered.".to_string(),
             active_topic: String::new(),
             topic_transition: String::new(),
             topic_context: String::new(),
@@ -96,20 +97,19 @@ impl AuditResult {
         }
     }
 
-    /// Create a parse-error pass-through result (fail-open).
+    /// Create a parse-error result (fail-CLOSED per §4).
     ///
-    /// A parse error is an infrastructure problem (the Observer's JSON was
-    /// garbled), NOT evidence that the candidate response is bad. Fail-open
-    /// is the correct policy here — blocking a valid response because the
-    /// auditor produced broken output is worse than passing it through.
+    /// A parse error means the observer could not produce a valid verdict.
+    /// Per governance §4, the system must fail-closed on safety-critical paths.
+    /// An unaudited response must never reach the user.
     pub fn parse_error(error: &str) -> Self {
         Self {
-            verdict: Verdict::Allowed,
+            verdict: Verdict::Blocked,
             confidence: 0.0,
             failure_category: "parse_error".to_string(),
             what_worked: String::new(),
             what_went_wrong: format!("Failed to parse observer verdict: {}", error),
-            how_to_fix: "Observer returned malformed JSON — response passed through.".to_string(),
+            how_to_fix: "Observer returned malformed JSON — response blocked until audit succeeds.".to_string(),
             active_topic: String::new(),
             topic_transition: String::new(),
             topic_context: String::new(),
@@ -327,17 +327,17 @@ mod tests {
     }
 
     #[test]
-    fn test_infrastructure_error_is_allowed() {
+    fn test_infrastructure_error_is_blocked() {
         let result = AuditResult::infrastructure_error("timeout");
-        assert!(result.verdict.is_allowed());
+        assert!(!result.verdict.is_allowed()); // §4: fail-closed
         assert_eq!(result.confidence, 0.0);
         assert_eq!(result.failure_category, "infrastructure_error");
     }
 
     #[test]
-    fn test_parse_error_is_allowed() {
+    fn test_parse_error_is_blocked() {
         let result = AuditResult::parse_error("no JSON found");
-        assert!(result.verdict.is_allowed());
+        assert!(!result.verdict.is_allowed()); // §4: fail-closed
         assert_eq!(result.failure_category, "parse_error");
     }
 

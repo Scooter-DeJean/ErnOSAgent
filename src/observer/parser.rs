@@ -5,7 +5,7 @@ use crate::observer::{AuditResult, Verdict};
 
 /// Parse an observer verdict from the model's JSON response.
 /// Handles ALLOWED/BLOCKED format with 6 fields.
-/// Falls back to fail-open on parse failure (infrastructure problem, not bad candidate).
+/// Falls back to fail-closed on parse failure (§4: unaudited responses must not pass).
 pub fn parse_verdict(response: &str) -> AuditResult {
     let json_str = extract_json(response);
 
@@ -15,7 +15,7 @@ pub fn parse_verdict(response: &str) -> AuditResult {
             tracing::warn!(
                 error = %e,
                 response_len = response.len(),
-                "Observer: failed to parse verdict JSON — fail-open (ALLOWED)"
+                "Observer: failed to parse verdict JSON — fail-CLOSED (BLOCKED)"
             );
             AuditResult::parse_error(&e.to_string())
         }
@@ -157,9 +157,9 @@ mod tests {
     }
 
     #[test]
-    fn test_fail_open_on_garbage() {
+    fn test_fail_closed_on_garbage() {
         let result = parse_verdict("This is not JSON at all");
-        assert!(result.verdict.is_allowed()); // Fail-open
+        assert!(!result.verdict.is_allowed()); // §4: Fail-closed
         assert_eq!(result.failure_category, "parse_error");
     }
 
