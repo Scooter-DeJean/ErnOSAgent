@@ -248,6 +248,7 @@ mod state_tests {
             review_deck: Arc::new(RwLock::new(
                 ern_os::learning::review::ReviewDeck::new(),
             )),
+            mesh_runtime: Arc::new(RwLock::new(None)),
         }
     }
 

@@ -4,7 +4,7 @@
 //! Axum web server — thin router orchestrator. Handlers live in `handlers/`.
 
 use crate::web::state::AppState;
-use crate::web::handlers::{system, system_interp, sessions, memory, scheduler, onboarding, api_keys, agents, content, tts, codes, platforms, platform_ingest, platform_stream, voice, video, upload, version, checkpoint, planning, models_hub, curriculum};
+use crate::web::handlers::{system, system_interp, sessions, memory, scheduler, onboarding, api_keys, agents, content, tts, codes, platforms, platform_ingest, platform_stream, voice, video, upload, version, checkpoint, planning, models_hub, curriculum, mesh, mesh_svc_comms, mesh_svc_infra, mesh_svc_social};
 use anyhow::Result;
 use axum::{Router, routing::{get, post, put, delete}};
 use tower_http::cors::CorsLayer;
@@ -38,6 +38,8 @@ fn build_router(state: AppState) -> Router {
         .merge(memory_routes())
         .merge(agent_routes())
         .merge(utility_routes())
+        .merge(mesh_routes())
+        .merge(mesh_service_routes())
         // WebSocket
         .route("/ws", get(crate::web::ws::ws_handler))
         .route("/ws/voice", get(voice::ws_voice_handler))
@@ -177,4 +179,78 @@ fn utility_routes() -> Router<AppState> {
         .route("/api/state-checkpoint/{id}", delete(checkpoint::delete_checkpoint))
         .route("/api/planning/status", get(planning::dag_status))
         .route("/api/planning/decompose", post(planning::decompose))
+}
+
+/// Mesh network routes.
+fn mesh_routes() -> Router<AppState> {
+    Router::new()
+        .route("/api/mesh/status", get(mesh::mesh_status))
+        .route("/api/mesh/dashboard", get(mesh::mesh_dashboard))
+        .route("/api/mesh/peers", get(mesh::mesh_peers))
+        .route("/api/mesh/capabilities", get(mesh::mesh_capabilities))
+        .route("/api/mesh/toggle", put(mesh::mesh_toggle))
+}
+
+/// Mesh service routes — all service CRUD endpoints with 64KB body limit.
+fn mesh_service_routes() -> Router<AppState> {
+    Router::new()
+        // Chat
+        .route("/api/mesh/chat/topics", get(mesh_svc_comms::chat_topics))
+        .route("/api/mesh/chat/messages/{topic}", get(mesh_svc_comms::chat_messages))
+        .route("/api/mesh/chat/send", post(mesh_svc_comms::chat_send))
+        // Mail
+        .route("/api/mesh/mail/inbox", get(mesh_svc_comms::mail_inbox))
+        .route("/api/mesh/mail/sent", get(mesh_svc_comms::mail_sent))
+        .route("/api/mesh/mail/message/{id}", get(mesh_svc_comms::mail_read))
+        .route("/api/mesh/mail/send", post(mesh_svc_comms::mail_send))
+        .route("/api/mesh/mail/message/{id}", delete(mesh_svc_comms::mail_delete))
+        // Voice
+        .route("/api/mesh/voice/rooms", get(mesh_svc_comms::voice_rooms))
+        .route("/api/mesh/voice/create", post(mesh_svc_comms::voice_create))
+        .route("/api/mesh/voice/join/{id}", post(mesh_svc_comms::voice_join))
+        .route("/api/mesh/voice/leave/{id}", post(mesh_svc_comms::voice_leave))
+        // Forum
+        .route("/api/mesh/forum/communities", get(mesh_svc_comms::forum_communities))
+        .route("/api/mesh/forum/communities", post(mesh_svc_comms::forum_create_community))
+        .route("/api/mesh/forum/threads/{community}", get(mesh_svc_comms::forum_threads))
+        .route("/api/mesh/forum/post", post(mesh_svc_comms::forum_post))
+        // Feed
+        .route("/api/mesh/feed", get(mesh_svc_comms::feed_list))
+        .route("/api/mesh/feed", post(mesh_svc_comms::feed_create))
+        // Economy
+        .route("/api/mesh/economy/balance", get(mesh_svc_infra::economy_balance))
+        .route("/api/mesh/economy/transactions", get(mesh_svc_infra::economy_transactions))
+        // Reputation
+        .route("/api/mesh/reputation", get(mesh_svc_infra::reputation_list))
+        .route("/api/mesh/reputation/trust/{peer_id}", post(mesh_svc_infra::reputation_trust))
+        // Sites
+        .route("/api/mesh/sites", get(mesh_svc_infra::sites_list))
+        .route("/api/mesh/sites/{name}", delete(mesh_svc_infra::sites_remove))
+        .route("/api/mesh/sites/publish", post(mesh_svc_infra::site_publish))
+        .route("/api/mesh/sites/browse/{name}/{*path}", get(mesh_svc_infra::site_browse))
+        // Relay
+        .route("/api/mesh/relay", get(mesh_svc_infra::relay_status))
+        .route("/api/mesh/relay/terminate/{peer_id}", post(mesh_svc_infra::relay_terminate))
+        // Transfers
+        .route("/api/mesh/transfers", get(mesh_svc_infra::transfers_list))
+        .route("/api/mesh/transfers/accept/{id}", post(mesh_svc_infra::transfer_accept))
+        .route("/api/mesh/transfers/reject/{id}", post(mesh_svc_infra::transfer_reject))
+        // ─── Contacts ───
+        .route("/api/mesh/contacts", get(mesh_svc_social::contacts_list))
+        .route("/api/mesh/contacts/add", post(mesh_svc_social::contact_add))
+        .route("/api/mesh/contacts/requests", get(mesh_svc_social::contact_requests))
+        .route("/api/mesh/contacts/accept/{peer_id}", post(mesh_svc_social::contact_accept))
+        .route("/api/mesh/contacts/block/{peer_id}", post(mesh_svc_social::contact_block))
+        .route("/api/mesh/contacts/{peer_id}", delete(mesh_svc_social::contact_remove))
+        // ─── Groups ───
+        .route("/api/mesh/groups", get(mesh_svc_social::groups_list))
+        .route("/api/mesh/groups/create", post(mesh_svc_social::group_create))
+        .route("/api/mesh/groups/{id}/invite", post(mesh_svc_social::group_invite))
+        .route("/api/mesh/groups/{id}/leave", post(mesh_svc_social::group_leave))
+        .route("/api/mesh/groups/{id}/kick/{peer_id}", post(mesh_svc_social::group_kick))
+        .route("/api/mesh/groups/{id}/messages", get(mesh_svc_social::group_messages))
+        .route("/api/mesh/groups/{id}/send", post(mesh_svc_social::group_send))
+        // ─── Offline Queue ───
+        .route("/api/mesh/offline_queue", get(mesh_svc_social::offline_queue_stats))
+        .layer(axum::extract::DefaultBodyLimit::max(65536))
 }

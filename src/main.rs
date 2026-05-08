@@ -355,6 +355,30 @@ fn build_app_state(
     ).context("Failed to initialise review deck")?;
     tracing::info!(cards = review_deck.count(), "Review deck initialised");
 
+    // Initialize mesh runtime if [mesh] config is present
+    let mesh_runtime = if config.mesh.is_some() {
+        match ern_mesh::runtime::MeshRuntime::initialize(
+            config.mesh.clone().unwrap(),
+            &data_dir,
+        ) {
+            Ok(runtime) => {
+                tracing::info!(
+                    peer_id = %runtime.peer_id(),
+                    modules = 15,
+                    "Mesh runtime initialized — all services wired"
+                );
+                Some(runtime)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to initialize mesh runtime — mesh disabled");
+                None
+            }
+        }
+    } else {
+        tracing::info!("No [mesh] config found — mesh network disabled");
+        None
+    };
+
     Ok(ern_os::web::state::AppState {
         config: Arc::new(config.clone()),
         model_spec: Arc::new(model_spec),
@@ -400,6 +424,7 @@ fn build_app_state(
         curriculum: Arc::new(RwLock::new(curriculum)),
         quarantine: Arc::new(RwLock::new(quarantine)),
         review_deck: Arc::new(RwLock::new(review_deck)),
+        mesh_runtime: Arc::new(RwLock::new(mesh_runtime)),
     })
 }
 

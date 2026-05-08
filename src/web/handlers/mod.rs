@@ -26,3 +26,7 @@ pub mod models_hub;
 pub mod platform_stream;
 pub mod sae_capture;
 pub mod curriculum;
+pub mod mesh;
+pub mod mesh_svc_comms;
+pub mod mesh_svc_infra;
+pub mod mesh_svc_social;

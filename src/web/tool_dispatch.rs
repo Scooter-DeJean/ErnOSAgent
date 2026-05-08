@@ -522,6 +522,7 @@ mod tests {
             review_deck: std::sync::Arc::new(tokio::sync::RwLock::new(
                 crate::learning::review::ReviewDeck::new(),
             )),
+            mesh_runtime: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
         };
         let result = rt.block_on(execute_tool_with_state(&state, &tc));
         assert!(result.output.contains("Unknown tool"));

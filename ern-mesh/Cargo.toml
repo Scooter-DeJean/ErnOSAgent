@@ -1,0 +1,54 @@
+[package]
+name = "ern-mesh"
+version = "0.1.0"
+edition = "2021"
+description = "ErnMesh — Decentralised mesh network layer for Ern-OS"
+license = "MIT"
+
+[dependencies]
+# Serialisation — config parsing + wire format
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Error handling
+anyhow = "1"
+
+# Logging
+tracing = "0.1"
+
+# P2P identity — Ed25519 keypair and PeerId
+libp2p-identity = { version = "0.2", features = ["ed25519", "peerid", "rand"] }
+
+# P2P networking — features added incrementally per PR
+libp2p = { version = "0.56", features = [
+    "tokio",       # Async runtime integration
+    "tcp",         # TCP transport
+    "quic",        # QUIC transport (built-in encryption)
+    "noise",       # Noise protocol for TCP encryption
+    "yamux",       # Stream multiplexing
+    "macros",      # NetworkBehaviour derive
+    "ed25519",     # Ed25519 identity support
+    "kad",         # Kademlia DHT for peer discovery
+    "mdns",        # mDNS for local network discovery
+    "identify",    # Peer identification protocol
+    "gossipsub",   # Pub/sub messaging (ErnChat, ErnieBook)
+    "ping",        # Peer connectivity checks
+] }
+
+# Async runtime
+tokio = { version = "1", features = ["rt", "macros"] }
+
+# Paths
+dirs = "6"
+
+# Cryptography — Double Ratchet E2E encryption (§14.6)
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+aes-gcm = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+rand = "0.8"
+hex = "0.4"
+
+[dev-dependencies]
+tempfile = "3"

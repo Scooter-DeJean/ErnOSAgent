@@ -32,6 +32,10 @@ pub struct AppConfig {
     pub discord: DiscordConfig,
     #[serde(default)]
     pub telegram: TelegramConfig,
+    /// Mesh network configuration — parsed by ern-mesh crate.
+    /// Optional: existing configs without [mesh] continue to work.
+    #[serde(default)]
+    pub mesh: Option<ern_mesh::config::MeshConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,6 +364,7 @@ impl Default for AppConfig {
             browser: BrowserConfig::default(),
             discord: DiscordConfig::default(),
             telegram: TelegramConfig::default(),
+            mesh: None,
         }
     }
 }

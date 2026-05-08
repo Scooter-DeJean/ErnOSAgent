@@ -61,4 +61,8 @@ pub struct AppState {
     pub quarantine: Arc<RwLock<QuarantineBuffer>>,
     /// Review deck — spaced repetition cards for curriculum retention.
     pub review_deck: Arc<RwLock<ReviewDeck>>,
+    /// Mesh network runtime — optional, wraps all 15 service modules.
+    /// Initialized at startup if [mesh] config is present, or at runtime
+    /// when the user enables mesh via the WebUI toggle.
+    pub mesh_runtime: Arc<RwLock<Option<ern_mesh::runtime::MeshRuntime>>>,
 }

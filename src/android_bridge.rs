@@ -253,5 +253,6 @@ fn build_app_state(
         review_deck: std::sync::Arc::new(tokio::sync::RwLock::new(
             crate::learning::review::ReviewDeck::new(),
         )),
+        mesh_runtime: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
     })
 }

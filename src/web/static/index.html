@@ -60,6 +60,9 @@
             <button class="nav-tab" data-view="scheduler" onclick="ErnOS.switchView('scheduler')">
                 <span class="nav-icon">⏱️</span> Scheduler
             </button>
+            <button class="nav-tab" data-view="mesh" onclick="ErnOS.switchView('mesh')">
+                <span class="nav-icon">🌐</span> Mesh
+            </button>
             <button class="nav-tab" data-view="codes" onclick="ErnOS.switchView('codes')">
                 <span class="nav-icon">💻</span> Ern-OS Code
             </button>
@@ -386,6 +389,124 @@
                 </div>
                 <div id="scheduler-sections">
                     <p class="empty-state">Loading scheduler...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Mesh Network View -->
+        <div class="view" id="view-mesh">
+            <div class="panel-content">
+                <div class="panel-header">
+                    <h2>🌐 Mesh Network</h2>
+                    <p class="subtitle">Decentralised compute, storage, and communication — powered by ErnMesh</p>
+                </div>
+
+                <!-- Mesh Enable/Disable Toggle -->
+                <div class="mesh-status-banner">
+                    <div class="mesh-status-indicator">
+                        <span class="mesh-status-dot" id="mesh-status-dot"></span>
+                        <span id="mesh-status-label">Checking...</span>
+                    </div>
+                    <div style="display:flex;align-items:center;gap:12px">
+                        <span class="mesh-peer-id" id="mesh-peer-id"></span>
+                        <label class="toggle-switch" title="Enable or disable the mesh network">
+                            <input type="checkbox" id="mesh-toggle" onchange="ErnOS.toggleMesh()">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Core Stats Grid -->
+                <div class="mesh-stats-grid" id="mesh-stats-grid">
+                    <div class="mesh-stat-card">
+                        <div class="mesh-stat-value" id="mesh-stat-peers">0</div>
+                        <div class="mesh-stat-label">Connected Peers</div>
+                    </div>
+                    <div class="mesh-stat-card">
+                        <div class="mesh-stat-value" id="mesh-stat-port">—</div>
+                        <div class="mesh-stat-label">Listen Port</div>
+                    </div>
+                    <div class="mesh-stat-card">
+                        <div class="mesh-stat-value" id="mesh-stat-balance">0.0</div>
+                        <div class="mesh-stat-label">ErnPoints</div>
+                    </div>
+                    <div class="mesh-stat-card">
+                        <div class="mesh-stat-value" id="mesh-stat-sessions">0</div>
+                        <div class="mesh-stat-label">Active Sessions</div>
+                    </div>
+                </div>
+
+                <!-- Service Cards Grid -->
+                <div class="mesh-services-grid" id="mesh-services-grid">
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">💬</div>
+                        <div class="mesh-svc-name">ErnChat</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-chat">0 messages</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">✉️</div>
+                        <div class="mesh-svc-name">ErnMail</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-mail">0 unread</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">🎙️</div>
+                        <div class="mesh-svc-name">ErnVoice</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-voice">0 rooms</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">📋</div>
+                        <div class="mesh-svc-name">ErnForum</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-forum">0 communities</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">📰</div>
+                        <div class="mesh-svc-name">ErnieBook</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-feed">0 posts</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">🌍</div>
+                        <div class="mesh-svc-name">ErnSites</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-sites">0 hosted</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">📡</div>
+                        <div class="mesh-svc-name">Relay</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-relay">0 active</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">📁</div>
+                        <div class="mesh-svc-name">Transfers</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-transfers">0 active</div>
+                    </div>
+                    <div class="mesh-service-card">
+                        <div class="mesh-svc-icon">⭐</div>
+                        <div class="mesh-svc-name">Reputation</div>
+                        <div class="mesh-svc-stat" id="mesh-svc-reputation">0 peers</div>
+                    </div>
+                </div>
+
+                <!-- Sub-tabs -->
+                <div class="tier-tabs" id="mesh-tabs" style="flex-wrap:wrap;gap:4px;">
+                    <button class="tier-tab active" onclick="ErnOS.loadMeshTab('overview', this)">Overview</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('chat', this)">Chat</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('mail', this)">Mail</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('voice', this)">Voice</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('forum', this)">Forum</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('feed', this)">Feed</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('economy', this)">Economy</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('reputation', this)">Reputation</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('sites', this)">Sites</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('relay', this)">Relay</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('files', this)">Files</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('contacts', this)">Contacts</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('groups', this)">Groups</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('peers', this)">Peers</button>
+                    <button class="tier-tab" onclick="ErnOS.loadMeshTab('capabilities', this)">Caps</button>
+                </div>
+
+                <!-- Tab content -->
+                <div id="mesh-tab-content">
+                    <p class="empty-state">Loading mesh data...</p>
                 </div>
             </div>
         </div>

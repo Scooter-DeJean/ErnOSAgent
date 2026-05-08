@@ -64,6 +64,7 @@ fn build_test_state(tmp: &std::path::Path) -> AppState {
         review_deck: std::sync::Arc::new(tokio::sync::RwLock::new(
             crate::learning::review::ReviewDeck::new(),
         )),
+        mesh_runtime: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
     }
 }
 
