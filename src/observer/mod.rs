@@ -192,13 +192,19 @@ pub async fn audit_response(
 
 /// Build the observer message list from the live context.
 ///
-/// Strategy:
-///   1. Keep the system message verbatim (identical to main chat)
-///   2. Keep all messages up to the last user message verbatim
-///   3. Replace the last user message with the structured audit instruction
-///      (7 sections: rules + user message + capabilities + tool context + candidate + JSON)
+/// Strategy (KV-cache-aware):
+///   1. Keep ALL messages VERBATIM (system + full history + last user message)
+///   2. Append the candidate response as an assistant message
+///   3. Append the audit instruction as a NEW user message
 ///
-/// This gives 100% context parity.
+/// This produces: [system, history..., user_query, candidate, audit_instruction]
+///
+/// The KV cache from the main inference already holds [system, history..., user_query]
+/// plus the generated candidate tokens. By keeping those messages verbatim and
+/// appending the candidate + audit, the observer reuses ~100% of the cached prefix.
+/// Without this, the observer would REPLACE the last user message with the audit
+/// instruction, invalidating the cache from that position and forcing a full
+/// re-process on both the observer AND the next turn's inference.
 fn build_observer_messages(
     conversation: &[Message],
     candidate_response: &str,
@@ -216,40 +222,36 @@ fn build_observer_messages(
         tool_context
     };
 
+    // The audit instruction no longer needs to embed the user message or
+    // candidate response — they're already in the conversation as verbatim
+    // messages. This keeps the instruction compact and avoids duplication.
     let audit_instruction = format!(
         "{rules}\n\n\
-         ## USER'S ORIGINAL MESSAGE\n{user_message}\n\n\
+         ## USER'S ORIGINAL MESSAGE\n\
+         [See the last user message in the conversation above.]\n\n\
          ## TOOL EXECUTION CONTEXT (THIS TURN ONLY)\n{tool_display}\n\n\
-         ## CANDIDATE RESPONSE TO AUDIT\n{candidate_response}\n\n\
+         ## CANDIDATE RESPONSE TO AUDIT\n\
+         [See the assistant message directly above this message.]\n\n\
          Respond with ONLY a JSON object matching the audit schema above.",
         rules = observer_rules,
     );
 
-    // Find the index of the last user message
-    let last_user_idx = conversation
-        .iter()
-        .rposition(|m| m.role == "user");
+    // KV-cache-aligned construction:
+    //   conversation verbatim → candidate as assistant → audit as user
+    let mut msgs: Vec<Message> = conversation.to_vec();
+    msgs.push(Message::text("assistant", candidate_response));
+    msgs.push(Message::text("user", &audit_instruction));
 
-    let messages = match last_user_idx {
-        Some(idx) => {
-            // 1-to-1 context parity: messages go through VERBATIM so the
-            // llama-server KV cache prefix matches the main inference exactly.
-            // Only the last message (audit instruction) needs processing.
-            let mut msgs: Vec<Message> = conversation[..idx].to_vec();
-            msgs.push(Message::text("user", &audit_instruction));
-            msgs
-        }
-        None => {
-            // No user message — fallback to minimal 2-message form
-            tracing::warn!("Observer: no user message found in context — using minimal fallback");
-            vec![
-                Message::text("system", "You are a strict quality auditor. Respond ONLY with the requested JSON."),
-                Message::text("user", &audit_instruction),
-            ]
-        }
-    };
+    // Log prefix alignment for debugging KV cache behaviour
+    tracing::debug!(
+        prefix_msgs = conversation.len(),
+        total_msgs = msgs.len(),
+        user_query_len = user_message.len(),
+        candidate_len = candidate_response.len(),
+        "Observer: KV-cache-aligned message construction"
+    );
 
-    (messages, audit_instruction)
+    (msgs, audit_instruction)
 }
 
 /// Format rejection feedback for injection into the agent's context.
@@ -351,21 +353,25 @@ mod tests {
         ];
         let (msgs, _instruction) = build_observer_messages(&live, "candidate reply", "", "Turn 2 question");
 
-        // System message must be identical
+        // All original messages preserved verbatim (KV cache alignment)
         assert_eq!(msgs[0].role, "system");
-
-        // Prior turns preserved verbatim
         assert_eq!(msgs[1].role, "user");
         assert_eq!(msgs[2].role, "assistant");
+        assert_eq!(msgs[3].role, "user");
+        assert_eq!(msgs[3].text_content(), "Turn 2 question");
 
-        // Last message is the audit instruction (replaces the original user turn)
+        // Candidate response appended as assistant message
+        assert_eq!(msgs[4].role, "assistant");
+        assert_eq!(msgs[4].text_content(), "candidate reply");
+
+        // Audit instruction appended as final user message
         let last = msgs.last().unwrap();
         assert_eq!(last.role, "user");
         assert!(last.content.as_str().unwrap_or("").contains("CANDIDATE RESPONSE TO AUDIT"));
-        assert!(last.content.as_str().unwrap_or("").contains("candidate reply"));
         assert!(last.content.as_str().unwrap_or("").contains("USER'S ORIGINAL MESSAGE"));
-        assert!(last.content.as_str().unwrap_or("").contains("Turn 2 question"));
-        assert_eq!(msgs.len(), 4);
+
+        // 4 original + 1 candidate + 1 audit = 6
+        assert_eq!(msgs.len(), 6);
     }
 
     #[test]
@@ -375,20 +381,24 @@ mod tests {
             Message::text("user", "hi"),
         ];
         let (msgs, _) = build_observer_messages(&live, "hello", "", "hi");
+        // 2 original + 1 candidate + 1 audit = 4
+        assert_eq!(msgs.len(), 4);
         let last = msgs.last().unwrap();
         assert!(last.content.as_str().unwrap_or("").contains("[No tools were executed in THIS TURN"));
     }
 
     #[test]
-    fn test_observer_messages_fallback_when_no_user_message() {
+    fn test_observer_messages_system_only_input() {
         let live = vec![
             Message::text("system", "sys"),
         ];
         let (msgs, _) = build_observer_messages(&live, "candidate", "", "");
-        assert_eq!(msgs.len(), 2);
+        // 1 original + 1 candidate + 1 audit = 3
+        assert_eq!(msgs.len(), 3);
         assert_eq!(msgs[0].role, "system");
-        assert_eq!(msgs[1].role, "user");
-        assert!(msgs[1].content.as_str().unwrap_or("").contains("CANDIDATE RESPONSE TO AUDIT"));
+        assert_eq!(msgs[1].role, "assistant"); // candidate
+        assert_eq!(msgs[2].role, "user"); // audit instruction
+        assert!(msgs[2].content.as_str().unwrap_or("").contains("CANDIDATE RESPONSE TO AUDIT"));
     }
 
     #[test]
