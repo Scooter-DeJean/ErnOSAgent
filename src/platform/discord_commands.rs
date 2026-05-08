@@ -37,6 +37,7 @@ fn all_commands() -> Vec<CreateCommand> {
         build_export(),
         build_stop(),
         build_shutdown(),
+        build_reboot(),
     ]
 }
 
@@ -121,13 +122,19 @@ fn build_shutdown() -> CreateCommand {
         .description("Gracefully shut down Ern-OS (admin only)")
 }
 
+/// /reboot — Restart the Ern-OS process (admin only).
+fn build_reboot() -> CreateCommand {
+    CreateCommand::new("reboot")
+        .description("Reboot and restart Ern-OS (admin only)")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_all_commands_count() {
-        assert_eq!(all_commands().len(), 9);
+        assert_eq!(all_commands().len(), 10);
     }
 
     #[test]

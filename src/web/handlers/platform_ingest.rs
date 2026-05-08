@@ -338,9 +338,25 @@ pub async fn audit_and_capture(
                     "Observer BLOCKED — re-inferring with feedback"
                 );
                 crate::observer::persist_audit_result(&state.config.general.data_dir, &output.result);
-                current_text = retry_after_rejection(
+                let (new_text, pre_audited) = retry_after_rejection(
                     state, provider, messages, tools, user_query, session_id, &rejected, &output.result,
                 ).await;
+                if pre_audited {
+                    // Tool chain already audited this text internally — accept directly.
+                    // Re-auditing causes context divergence (the outer loop lacks the
+                    // tool results that the inner audit had), producing false rejections.
+                    tracing::info!(
+                        retries,
+                        "Observer retry: tool chain returned pre-audited reply — accepting"
+                    );
+                    return (new_text, AuditSummary {
+                        verdict: "Allowed".to_string(),
+                        confidence: 0.0,
+                        retries,
+                        active_topic: String::new(),
+                    });
+                }
+                current_text = new_text;
             }
             Err(e) => {
                 // §4: Fail-CLOSED — observer down means response blocked.
@@ -377,6 +393,11 @@ fn handle_approved(
 /// Handles tool calls in the retry response — the model may follow observer
 /// guidance by calling file_read/codebase_search instead of generating text.
 ///
+/// Returns `(text, pre_audited)` — when the retry dispatches through
+/// `run_platform_tool_chain`, the tool chain already runs `audit_and_capture`
+/// internally. The `pre_audited = true` flag tells the outer loop to accept
+/// the result directly, preventing the double-audit that causes infinite loops.
+///
 /// Uses Box::pin indirection because this is part of a recursive async cycle:
 /// retry_after_rejection → run_platform_tool_chain → audit_and_capture → retry_after_rejection
 fn retry_after_rejection<'a>(
@@ -388,9 +409,16 @@ fn retry_after_rejection<'a>(
     session_id: &'a str,
     rejected_text: &'a str,
     result: &'a crate::observer::AuditResult,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = String> + Send + 'a>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = (String, bool)> + Send + 'a>> {
     Box::pin(async move {
         let feedback = crate::observer::format_rejection_feedback(result);
+
+        // Prune stale rejection pairs before appending new ones.
+        // Without this, repeated confabulation retries stack N copies of the
+        // rejected text + feedback, polluting the context with the very content
+        // the observer told the model to stop generating.
+        prune_stale_rejection_pairs(messages);
+
         messages.push(crate::provider::Message::text("assistant", rejected_text));
         messages.push(crate::provider::Message::text("system", &feedback));
         super::platform_exec::enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, true).await;
@@ -403,10 +431,11 @@ fn retry_after_rejection<'a>(
                     crate::web::training_capture::capture_rejection(
                         state, user_query, rejected_text, &text, &result.what_went_wrong,
                     );
-                    return text;
+                    return (text, false);
                 }
                 sc::ConsumeResult::ToolCall { id, name, arguments } => {
-                    // Model is following observer guidance — execute the tool chain
+                    // Model is following observer guidance — execute the tool chain.
+                    // The tool chain runs audit_and_capture internally → pre-audited.
                     tracing::info!(
                         tool = %name, retries = ?result.failure_category,
                         "Observer retry: model called tool (following feedback) — executing"
@@ -415,7 +444,7 @@ fn retry_after_rejection<'a>(
                     let (reply, _events, _audit) = super::platform_exec::run_platform_tool_chain(
                         state, provider, messages, tools, user_query, session_id, tc, None,
                     ).await;
-                    return reply;
+                    return (reply, true);
                 }
                 sc::ConsumeResult::ToolCalls(calls) => {
                     tracing::info!(
@@ -433,15 +462,40 @@ fn retry_after_rejection<'a>(
                         let (reply, _events, _audit) = super::platform_exec::run_platform_tool_chain(
                             state, provider, messages, tools, user_query, session_id, last_tc, None,
                         ).await;
-                        return reply;
+                        return (reply, true);
                     }
                 }
                 _ => {} // Empty/Error — fall through to rejected_text
             }
         }
 
-        rejected_text.to_string()
+        (rejected_text.to_string(), false)
     })
+}
+
+/// Remove prior observer rejection pairs (assistant rejected text + system feedback)
+/// from the message history. Keeps only the latest pair to prevent context pollution.
+///
+/// During confabulation retries, each rejection appends the rejected text and feedback.
+/// After 8 retries, the context contains 8 copies of hallucinated content (e.g. "ErnieBook")
+/// which the model sees 16 times and treats as real. Pruning ensures only the most recent
+/// rejection context is present.
+fn prune_stale_rejection_pairs(messages: &mut Vec<crate::provider::Message>) {
+    // Walk backwards and remove system messages that contain the rejection marker
+    let mut i = messages.len();
+    while i > 0 {
+        i -= 1;
+        if messages[i].role == "system"
+            && messages[i].text_content().contains("[SELF-CHECK FAIL: INVISIBLE TO USER]")
+        {
+            // Remove the feedback message and the preceding assistant rejected text
+            messages.remove(i);
+            if i > 0 && messages[i - 1].role == "assistant" {
+                messages.remove(i - 1);
+                i -= 1;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -491,5 +545,42 @@ mod tests {
         let json = serde_json::to_value(&summary).unwrap();
         assert_eq!(json["verdict"], "Allowed");
         assert_eq!(json["confidence"], 8.5);
+    }
+
+    #[test]
+    fn test_prune_stale_rejection_pairs_removes_feedback() {
+        let mut messages = vec![
+            crate::provider::Message::text("system", "You are Ernos."),
+            crate::provider::Message::text("user", "Hello"),
+            crate::provider::Message::text("assistant", "rejected response 1"),
+            crate::provider::Message::text("system", "[SELF-CHECK FAIL: INVISIBLE TO USER] Category: confabulation"),
+            crate::provider::Message::text("assistant", "rejected response 2"),
+            crate::provider::Message::text("system", "[SELF-CHECK FAIL: INVISIBLE TO USER] Category: confabulation"),
+        ];
+        prune_stale_rejection_pairs(&mut messages);
+        // Should remove both rejection pairs, leaving only system + user
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "system");
+        assert_eq!(messages[1].role, "user");
+    }
+
+    #[test]
+    fn test_prune_stale_rejection_pairs_preserves_non_rejection() {
+        let mut messages = vec![
+            crate::provider::Message::text("system", "You are Ernos."),
+            crate::provider::Message::text("user", "Hello"),
+            crate::provider::Message::text("assistant", "Good response"),
+            crate::provider::Message::text("system", "Normal system message"),
+        ];
+        prune_stale_rejection_pairs(&mut messages);
+        // Nothing removed — no rejection markers
+        assert_eq!(messages.len(), 4);
+    }
+
+    #[test]
+    fn test_prune_stale_rejection_pairs_empty() {
+        let mut messages: Vec<crate::provider::Message> = Vec::new();
+        prune_stale_rejection_pairs(&mut messages);
+        assert!(messages.is_empty());
     }
 }

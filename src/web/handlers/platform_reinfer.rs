@@ -70,6 +70,9 @@ pub(crate) async fn reinfer_and_dispatch(
             ).await;
             LoopAction::Escalate(reply, events, audit)
         }
+        ConsumeResult::Error(ref e) if e.contains("Stream stalled") => {
+            handle_stall(state, provider, messages, tools, user_query, session_id, e).await
+        }
         ConsumeResult::Error(e) => {
             tracing::error!(error = %e, "Platform L1 stream error");
             LoopAction::Error(format!("Error: {}", e))
@@ -104,6 +107,46 @@ async fn handle_spiral(
         }
         ConsumeResult::Error(e) => LoopAction::Error(format!("Spiral recovery: {}", e)),
         _ => LoopAction::Error("Spiral recovery: unexpected result".to_string()),
+    }
+}
+
+/// Handle stall detection during re-inference — retry with thinking disabled.
+///
+/// Mirrors the recovery pattern in `platform_stream.rs:273-299`. When the
+/// server decodes tokens but the HTTP stream doesn't flush, retrying with
+/// thinking disabled avoids the deep-thinking codepath that triggers the stall.
+async fn handle_stall(
+    state: &AppState,
+    provider: &dyn crate::provider::Provider,
+    messages: &mut Vec<crate::provider::Message>,
+    tools: &serde_json::Value,
+    user_query: &str,
+    session_id: &str,
+    original_error: &str,
+) -> LoopAction {
+    tracing::warn!(
+        error = %original_error,
+        "Stall detected during re-inference — retrying with thinking disabled"
+    );
+
+    let retry_rx = match provider.chat(messages, Some(tools), false).await {
+        Ok(rx) => rx,
+        Err(e) => return LoopAction::Error(format!("Stall recovery failed: {}", e)),
+    };
+
+    use crate::inference::stream_consumer::{self, ConsumeResult, NullSink};
+    let mut retry_sink = NullSink;
+    match stream_consumer::consume_stream(retry_rx, &mut retry_sink).await {
+        ConsumeResult::Reply { text, .. } if !text.trim().is_empty() => {
+            let (audited, audit) = audit_and_capture(
+                state, provider, messages, tools, user_query, &text, session_id,
+            ).await;
+            LoopAction::Reply(audited, audit)
+        }
+        ConsumeResult::ToolCall { id, name, arguments } => {
+            LoopAction::NextTool(crate::tools::schema::ToolCall { id, name, arguments })
+        }
+        _ => LoopAction::Error("Inference stalled during processing. Please retry.".into()),
     }
 }
 

@@ -50,6 +50,7 @@ pub async fn dispatch(ctx: &Context, cmd: &CommandInteraction) {
         "export" => handle_export(ctx, cmd, hub_port, &session_id).await,
         "stop" => handle_stop(ctx, cmd, hub_port).await,
         "shutdown" => handle_shutdown(ctx, cmd, is_admin).await,
+        "reboot" => handle_reboot(ctx, cmd, is_admin).await,
         other => {
             tracing::warn!(cmd = %other, "Unknown slash command");
             let _ = ack_ephemeral(ctx, cmd, "Unknown command").await;
@@ -265,6 +266,60 @@ async fn handle_shutdown(ctx: &Context, cmd: &CommandInteraction, is_admin: bool
     // Give Discord a moment to deliver the acknowledgement
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     std::process::exit(0);
+}
+
+/// /reboot — Restart the Ern-OS process by re-exec'ing the current binary.
+/// Admin only. The process replaces itself with a fresh instance.
+async fn handle_reboot(ctx: &Context, cmd: &CommandInteraction, is_admin: bool) {
+    if !is_admin {
+        let _ = ack_ephemeral(ctx, cmd, "⛔ Reboot is restricted to admins.").await;
+        return;
+    }
+    let _ = ack_ephemeral(ctx, cmd, "⚡ **Rebooting Ern-OS…** Back shortly.").await;
+    tracing::warn!(user = %cmd.user.name, "Reboot triggered via /reboot");
+
+    // Give Discord a moment to deliver the acknowledgement
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    reboot_process();
+}
+
+/// Re-exec the current binary, replacing this process with a fresh instance.
+/// On Unix, uses `exec()` for atomic process replacement.
+/// On non-Unix, falls back to spawning a new process and exiting.
+fn reboot_process() -> ! {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to determine executable path for reboot");
+            std::process::exit(1);
+        }
+    };
+    let args: Vec<String> = std::env::args().collect();
+
+    tracing::info!(exe = %exe.display(), args = ?args, "Re-exec'ing process");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let err = std::process::Command::new(&exe)
+            .args(&args[1..])
+            .exec();
+        // exec() only returns on error
+        tracing::error!(error = %err, "exec() failed — falling back to exit");
+        std::process::exit(1);
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Non-Unix: spawn new process then exit current
+        match std::process::Command::new(&exe).args(&args[1..]).spawn() {
+            Ok(_) => std::process::exit(0),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to spawn new process for reboot");
+                std::process::exit(1);
+            }
+        }
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────
