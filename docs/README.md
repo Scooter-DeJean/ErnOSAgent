@@ -84,7 +84,7 @@ User → WebUI (localhost:3000)
 | Language | Rust (Edition 2021) |
 | Source files | 183 `.rs` files |
 | Lines of code | ~29,000 (src only) |
-| Tests | 674 passing (598 lib + 76 e2e) |
+| Tests | 669 passing |
 | Test failures | 0 |
 | Compiler warnings | 0 |
 | Modules | 19 top-level |

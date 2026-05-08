@@ -12,7 +12,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" />
-  <img src="https://img.shields.io/badge/tests-674%20passing-brightgreen?style=flat-square" />
+  <img src="https://img.shields.io/badge/tests-669%20passing-brightgreen?style=flat-square" />
   <img src="https://img.shields.io/badge/warnings-0-brightgreen?style=flat-square" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
 </p>
@@ -233,7 +233,7 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 | Language | Rust (Edition 2021) |
 | Source files | 183 `.rs` files |
 | Lines of code | ~29,000 |
-| Tests | 674 passing (598 lib + 76 e2e) |
+| Tests | 669 passing |
 | Test failures | 0 |
 | Compiler warnings | 0 |
 | Tools | 31 unique (22 in L1, 29 in L2) |

@@ -96,7 +96,7 @@ src/
 ├── config/           # Configuration loading and validation
 ├── inference/        # Stream consumption, context assembly
 ├── interpretability/ # SAE training and feature analysis
-├── memory/           # 5-tier memory persistence
+├── memory/           # 7-tier memory persistence
 ├── observer/         # Response audit pipeline
 ├── platform/         # Discord, Telegram adapters (WebUI clients)
 ├── provider/         # LLM provider trait + implementations
