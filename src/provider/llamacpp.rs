@@ -38,7 +38,7 @@ impl LlamaCppProvider {
             "-c".to_string(),
             "0".to_string(), // Auto-detect context from GGUF
             "-np".to_string(),
-            "1".to_string(), // Single slot — prevents unused slots wasting KV cache
+            "2".to_string(), // Two slots: 0=main inference, 1=observer — prevents KV cache thrash
             "-ngl".to_string(),
             self.config.n_gpu_layers.to_string(),
         ];
@@ -59,17 +59,22 @@ impl LlamaCppProvider {
     }
 
     /// Build the request body for chat completions.
+    /// `slot_id` pins the request to a specific KV cache slot:
+    ///   - Slot 0: main inference (preserves conversation KV cache across turns)
+    ///   - Slot 1: observer/utility (never evicts the main inference cache)
     fn build_chat_body(
         &self,
         messages: &[Message],
         tools: Option<&serde_json::Value>,
         stream: bool,
         thinking: bool,
+        slot_id: i32,
     ) -> serde_json::Value {
         let mut body = serde_json::json!({
             "messages": messages,
             "stream": stream,
             "max_tokens": -1,
+            "id_slot": slot_id,
         });
 
         if let Some(tools) = tools {
@@ -170,7 +175,7 @@ impl Provider for LlamaCppProvider {
         thinking: bool,
     ) -> Result<mpsc::Receiver<StreamEvent>> {
         let url = format!("{}/v1/chat/completions", self.base_url);
-        let body = self.build_chat_body(messages, tools, true, thinking);
+        let body = self.build_chat_body(messages, tools, true, thinking, 0);
 
         // Retry on transient connection errors (connection reset/closed/refused)
         let max_retries = 3;
@@ -251,7 +256,7 @@ impl Provider for LlamaCppProvider {
         tools: Option<&serde_json::Value>,
     ) -> Result<String> {
         let url = format!("{}/v1/chat/completions", self.base_url);
-        let body = self.build_chat_body(messages, tools, false, false);
+        let body = self.build_chat_body(messages, tools, false, false, 1);
 
         // Retry on transient connection errors (same policy as chat())
         let max_retries = 3;
@@ -362,7 +367,7 @@ impl Provider for LlamaCppProvider {
 
     async fn count_tokens(&self, messages: &[Message], tools: Option<&serde_json::Value>, thinking: bool) -> Result<usize> {
         let url = format!("{}/v1/chat/completions", self.base_url);
-        let mut body = self.build_chat_body(messages, tools, false, thinking);
+        let mut body = self.build_chat_body(messages, tools, false, thinking, 0);
         body["max_tokens"] = serde_json::json!(1);
         body["stream"] = serde_json::json!(false);
 
@@ -468,8 +473,9 @@ mod tests {
         let config = LlamaCppConfig::default();
         let provider = LlamaCppProvider::new(&config);
         let messages = vec![Message::text("user", "Hello")];
-        let body = provider.build_chat_body(&messages, None, true, true);
+        let body = provider.build_chat_body(&messages, None, true, true, 0);
         assert_eq!(body["stream"], true);
+        assert_eq!(body["id_slot"], 0, "Main inference must target slot 0");
     }
 
     #[test]
@@ -478,7 +484,7 @@ mod tests {
         let provider = LlamaCppProvider::new(&config);
         let messages = vec![Message::text("user", "Hello")];
         let tools = serde_json::json!([{"type": "function", "function": {"name": "test"}}]);
-        let body = provider.build_chat_body(&messages, Some(&tools), true, true);
+        let body = provider.build_chat_body(&messages, Some(&tools), true, true, 0);
         assert!(body["tools"].is_array());
     }
 
@@ -487,8 +493,9 @@ mod tests {
         let config = LlamaCppConfig::default();
         let provider = LlamaCppProvider::new(&config);
         let messages = vec![Message::text("user", "Test")];
-        let body = provider.build_chat_body(&messages, None, false, false);
+        let body = provider.build_chat_body(&messages, None, false, false, 1);
         assert_eq!(body["stream"], false, "chat_sync must use stream=false");
+        assert_eq!(body["id_slot"], 1, "Observer/sync must target slot 1");
         assert!(body["messages"].is_array());
     }
 
