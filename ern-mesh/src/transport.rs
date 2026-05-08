@@ -145,14 +145,46 @@ pub fn parse_multiaddr(addr: &str) -> Result<libp2p::Multiaddr> {
         ))
 }
 
+/// Default ErnMesh founding node addresses.
+///
+/// These are the always-on bootstrap nodes that new peers dial to enter
+/// the global Kademlia DHT. Without at least one reachable bootstrap peer,
+/// Kademlia cannot bootstrap and discovery is LAN-only (mDNS).
+///
+/// Add VPS addresses here once founding nodes are deployed.
+/// Format: "/ip4/<IP>/tcp/4001/p2p/<PEER_ID>"
+const DEFAULT_BOOTSTRAP_PEERS: &[&str] = &[
+    // Founding Node 1 — to be configured when VPS is deployed
+    // "/ip4/<VPS_IP>/tcp/4001/p2p/<PEER_ID>",
+    // "/ip4/<VPS_IP>/udp/4001/quic-v1/p2p/<PEER_ID>",
+];
+
 /// Parse all bootstrap peer addresses from config.
 ///
-/// Returns a `Vec` of parsed `Multiaddr` values. Logs a warning for
-/// any addresses that fail to parse (but does not fail the entire operation).
+/// When the user has not configured any bootstrap peers, falls back to
+/// the hardcoded `DEFAULT_BOOTSTRAP_PEERS` founding nodes. This ensures
+/// a fresh install can join the global mesh without manual configuration.
+///
+/// Logs a warning for any addresses that fail to parse.
 pub fn parse_bootstrap_addrs(config: &MeshConfig) -> Vec<libp2p::Multiaddr> {
-    let mut addrs = Vec::with_capacity(config.bootstrap_peers.len());
+    // Use user-configured peers, or fall back to defaults
+    let peer_strings: Vec<String> = if config.bootstrap_peers.is_empty() {
+        let defaults: Vec<String> = DEFAULT_BOOTSTRAP_PEERS.iter()
+            .filter(|s| !s.starts_with("//")) // skip commented-out entries
+            .map(|s| s.to_string())
+            .collect();
+        if defaults.is_empty() {
+            tracing::info!("No bootstrap peers configured and no defaults available — mDNS-only discovery");
+        } else {
+            tracing::info!(count = defaults.len(), "Using default ErnMesh founding nodes");
+        }
+        defaults
+    } else {
+        config.bootstrap_peers.clone()
+    };
 
-    for peer_str in &config.bootstrap_peers {
+    let mut addrs = Vec::with_capacity(peer_strings.len());
+    for peer_str in &peer_strings {
         match parse_multiaddr(peer_str) {
             Ok(addr) => {
                 tracing::debug!(addr = %addr, "Parsed bootstrap peer address");
@@ -169,7 +201,7 @@ pub fn parse_bootstrap_addrs(config: &MeshConfig) -> Vec<libp2p::Multiaddr> {
     }
 
     tracing::info!(
-        total = config.bootstrap_peers.len(),
+        configured = peer_strings.len(),
         valid = addrs.len(),
         "Parsed bootstrap peer addresses"
     );

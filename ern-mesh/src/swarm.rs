@@ -42,8 +42,8 @@ pub fn build_swarm(
     keypair: Keypair,
     config: &MeshConfig,
 ) -> Result<Swarm<MeshBehaviour>> {
-    let behaviour = crate::behaviour::build_behaviour(&keypair, config)
-        .context("Failed to build mesh behaviour")?;
+    let config_clone = config.clone();
+    let keypair_clone = keypair.clone();
 
     let swarm = SwarmBuilder::with_existing_identity(keypair)
         .with_tokio()
@@ -54,14 +54,23 @@ pub fn build_swarm(
         )
         .map_err(|e| anyhow::anyhow!("Failed to configure TCP transport: {}", e))?
         .with_quic()
-        .with_behaviour(|_| Ok(behaviour))
+        .with_relay_client(
+            libp2p::noise::Config::new,
+            libp2p::yamux::Config::default,
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to configure relay client: {}", e))?
+        .with_behaviour(|_key, relay_client| {
+            crate::behaviour::build_behaviour_with_relay(
+                &keypair_clone, &config_clone, relay_client,
+            ).map_err(|e| e.into())
+        })
         .map_err(|e| anyhow::anyhow!("Failed to attach behaviour: {}", e))?
         .with_swarm_config(|cfg| {
             cfg.with_idle_connection_timeout(std::time::Duration::from_secs(60))
         })
         .build();
 
-    tracing::info!("Swarm built with TCP/Noise/Yamux + QUIC transports");
+    tracing::info!("Swarm built with TCP/Noise/Yamux + QUIC + Relay transports");
 
     Ok(swarm)
 }
@@ -98,11 +107,18 @@ pub async fn build_and_spawn_swarm(
         .context("Failed to bind TCP listener")?;
     tracing::info!(addr = %tcp_addr, "TCP listener bound");
 
-    // Dial bootstrap peers
+    // Dial bootstrap peers and listen via relay circuit
     for addr in bootstrap_addrs {
         match swarm.dial(addr.clone()) {
             Ok(_) => tracing::info!(addr = %addr, "Dialing bootstrap peer"),
             Err(e) => tracing::warn!(addr = %addr, error = %e, "Failed to dial bootstrap peer"),
+        }
+        // Listen on relay circuit through this bootstrap peer
+        let relay_addr = addr.clone()
+            .with(libp2p::multiaddr::Protocol::P2pCircuit);
+        match swarm.listen_on(relay_addr.clone()) {
+            Ok(_) => tracing::info!(addr = %relay_addr, "Listening via relay circuit"),
+            Err(e) => tracing::debug!(addr = %relay_addr, error = %e, "Relay circuit listen skipped"),
         }
     }
 
@@ -240,6 +256,15 @@ async fn handle_behaviour_event(
         }
         MeshBehaviourEvent::Ping(ping_event) => {
             handle_ping_event(ping_event);
+        }
+        MeshBehaviourEvent::Autonat(autonat_event) => {
+            handle_autonat_event(swarm, autonat_event);
+        }
+        MeshBehaviourEvent::Dcutr(dcutr_event) => {
+            tracing::info!(event = ?dcutr_event, "DCUtR: hole-punch event");
+        }
+        MeshBehaviourEvent::RelayClient(relay_event) => {
+            tracing::debug!(event = ?relay_event, "Relay client event");
         }
     }
 }
@@ -427,6 +452,41 @@ fn handle_ping_event(event: libp2p::ping::Event) {
     }
 }
 
+
+/// Handle AutoNAT events — detect whether we're publicly reachable.
+///
+/// When AutoNAT confirms we have a public address, we add it as an
+/// external address so other peers can discover and connect to us directly.
+/// When behind NAT, peers reach us via relay circuit instead.
+fn handle_autonat_event(
+    swarm: &mut Swarm<MeshBehaviour>,
+    event: libp2p::autonat::Event,
+) {
+    use libp2p::autonat::Event;
+
+    match event {
+        Event::StatusChanged { old, new } => {
+            tracing::info!(
+                old = ?old,
+                new = ?new,
+                "AutoNAT: status changed"
+            );
+            if let libp2p::autonat::NatStatus::Public(addr) = new {
+                tracing::info!(
+                    addr = %addr,
+                    "AutoNAT: publicly reachable — adding external address"
+                );
+                swarm.add_external_address(addr);
+            }
+        }
+        Event::InboundProbe(probe) => {
+            tracing::debug!(probe = ?probe, "AutoNAT: inbound probe");
+        }
+        Event::OutboundProbe(probe) => {
+            tracing::debug!(probe = ?probe, "AutoNAT: outbound probe");
+        }
+    }
+}
 // Tests extracted to swarm_tests.rs per §1.1 (file length limit).
 #[cfg(test)]
 #[path = "swarm_tests.rs"]

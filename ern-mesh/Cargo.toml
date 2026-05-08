@@ -34,6 +34,9 @@ libp2p = { version = "0.56", features = [
     "identify",    # Peer identification protocol
     "gossipsub",   # Pub/sub messaging (ErnChat, ErnieBook)
     "ping",        # Peer connectivity checks
+    "autonat",     # NAT status detection (public vs private)
+    "relay",       # Relay v2 — circuit relay for unreachable peers
+    "dcutr",       # Direct Connection Upgrade through Relay (hole-punching)
 ] }
 
 # Async runtime
