@@ -84,6 +84,71 @@ impl Provider for MockProvider {
     async fn health(&self) -> bool { true }
 }
 
+/// Mock provider that returns valid audit JSON on `chat_sync` (used by the
+/// observer) while returning normal text on `chat` (used by inference).
+/// This mirrors real behaviour: the observer calls `chat_sync` and expects JSON.
+struct AuditAwareMockProvider {
+    response_text: String,
+}
+
+impl AuditAwareMockProvider {
+    fn new() -> Self {
+        Self {
+            response_text: "Hello! I am Ern-OS, a high-performance AI engine.".into(),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for AuditAwareMockProvider {
+    fn id(&self) -> &str { "mock-audit" }
+    fn display_name(&self) -> &str { "Mock Audit Provider" }
+
+    async fn get_model_spec(&self) -> anyhow::Result<ModelSpec> {
+        Ok(ModelSpec {
+            name: "mock-model-v1".into(),
+            context_length: 8192,
+            supports_vision: false,
+            supports_video: false,
+            supports_audio: false,
+            supports_tool_calling: true,
+            supports_thinking: true,
+            embedding_dimensions: 4,
+        })
+    }
+
+    async fn chat(
+        &self, _messages: &[Message], _tools: Option<&serde_json::Value>, _thinking: bool,
+    ) -> anyhow::Result<mpsc::Receiver<StreamEvent>> {
+        let (tx, rx) = mpsc::channel(32);
+        let text = self.response_text.clone();
+        tokio::spawn(async move {
+            for word in text.split_whitespace() {
+                let _ = tx.send(StreamEvent::TextDelta(format!("{} ", word))).await;
+            }
+            let _ = tx.send(StreamEvent::Done).await;
+        });
+        Ok(rx)
+    }
+
+    async fn chat_sync(
+        &self, _messages: &[Message], _tools: Option<&serde_json::Value>,
+    ) -> anyhow::Result<String> {
+        // Return valid audit JSON — the observer calls chat_sync for verdicts
+        Ok(r#"{"verdict": "ALLOWED", "confidence": 0.95, "failure_category": "none", "what_worked": "Good response", "what_went_wrong": "", "how_to_fix": ""}"#.to_string())
+    }
+
+    async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
+        Ok(vec![0.1, 0.2, 0.3, 0.4])
+    }
+
+    async fn count_tokens(&self, messages: &[Message], _tools: Option<&serde_json::Value>, _thinking: bool) -> anyhow::Result<usize> {
+        Ok(messages.iter().map(|m| m.text_content().len() / 3).sum())
+    }
+
+    async fn health(&self) -> bool { true }
+}
+
 // ============================================================
 // UNIT TESTS: Memory Manager
 // ============================================================
@@ -354,11 +419,14 @@ mod observer_e2e {
     }
 
     #[tokio::test]
-    async fn test_audit_fail_open() {
+    async fn test_audit_fail_closed_on_garbage() {
+        // §4: When the observer returns unparseable output, the system must
+        // fail-CLOSED — unaudited responses must not reach the user.
         let p = MockProvider::with_response("Not JSON");
         let conv = vec![ern_os::provider::Message::text("user", "q")];
         let output = observer::audit_response(&p, &conv, "a", "", "q").await.unwrap();
-        assert!(output.result.verdict.is_allowed()); // Fail-open
+        assert!(!output.result.verdict.is_allowed()); // Fail-CLOSED
+        assert_eq!(output.result.failure_category, "parse_error");
     }
 }
 
@@ -396,9 +464,11 @@ mod observer_parser_e2e {
     }
 
     #[test]
-    fn test_garbage_fail_open() {
+    fn test_garbage_fail_closed() {
+        // §4: Unparseable observer output must fail-CLOSED.
         let v = parse_verdict("garbage text");
-        assert!(v.verdict.is_allowed()); // Fail-open
+        assert!(!v.verdict.is_allowed()); // Fail-CLOSED
+        assert_eq!(v.failure_category, "parse_error");
     }
 
     #[test]
@@ -847,7 +917,9 @@ mod full_pipeline_e2e {
     async fn test_complete_user_flow() {
         let tmp = TempDir::new().unwrap();
         let mut memory = MemoryManager::new(tmp.path()).unwrap();
-        let provider = MockProvider::new();
+        // Use AuditAwareMockProvider — returns valid JSON on chat_sync (observer)
+        // and normal text on chat (inference), matching real system behaviour.
+        let provider = super::AuditAwareMockProvider::new();
 
         // 1. User message
         let user_msg = "What is Rust?";
@@ -864,14 +936,16 @@ mod full_pipeline_e2e {
         let response = provider.chat_sync(&messages, None).await.unwrap();
         assert!(!response.is_empty());
 
-        // 4. Observer audit
+        // 4. Observer audit (provider returns valid ALLOWED JSON via chat_sync)
         let conv = vec![ern_os::provider::Message::text("user", user_msg)];
-        let output = ern_os::observer::audit_response(&provider, &conv, &response, "", user_msg).await.unwrap();
-        assert!(output.result.verdict.is_allowed()); // Mock returns non-JSON → fail-open
+        let output = ern_os::observer::audit_response(
+            &provider, &conv, "Rust is a systems language.", "", user_msg,
+        ).await.unwrap();
+        assert!(output.result.verdict.is_allowed());
 
         // 5. Archive
         memory.ingest_turn("user", user_msg, "test_sess", None);
-        memory.ingest_turn("assistant", &response, "test_sess", None);
+        memory.ingest_turn("assistant", "Rust is a systems language.", "test_sess", None);
         assert_eq!(memory.timeline.entry_count(), 2);
 
         // 6. Recall should now contain data
