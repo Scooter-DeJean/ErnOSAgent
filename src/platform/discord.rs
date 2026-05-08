@@ -310,7 +310,10 @@ impl PlatformAdapter for DiscordAdapter {
     }
 }
 
-/// Spawn the serenity Discord client in a background task.
+/// Spawn the serenity Discord client in a background task with automatic reconnect.
+/// On disconnect (internet drop, gateway error, etc.), retries with jittered
+/// exponential backoff: 1s → 2s → 4s → … → 60s cap, ±25% jitter.
+/// Only exits when `shutdown_rx` fires.
 fn spawn_discord_client(
     token: String,
     handler: super::discord_handler::Handler,
@@ -324,36 +327,103 @@ fn spawn_discord_client(
         | GatewayIntents::MESSAGE_CONTENT;
 
     tokio::spawn(async move {
-        let mut client = match serenity::Client::builder(&token, intents)
-            .event_handler(handler)
-            .type_map_insert::<super::discord_cmd_handlers::HubPortKey>(hub_port)
-            .type_map_insert::<super::discord_cmd_handlers::AdminIdsKey>(admin_ids)
-            .await
-        {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!(error = %e, "Failed to create Discord client");
-                return;
-            }
-        };
+        let base_backoff = std::time::Duration::from_secs(1);
+        let max_backoff = std::time::Duration::from_secs(60);
+        let mut backoff = base_backoff;
 
-        connected.store(true, Ordering::SeqCst);
-        tracing::info!("Discord adapter connected");
+        loop {
+            let client = build_discord_client(
+                &token, handler.clone(), hub_port, admin_ids.clone(), intents,
+            ).await;
 
-        tokio::select! {
-            result = client.start() => {
-                if let Err(e) = result {
-                    tracing::error!(error = %e, "Discord client error");
+            let mut client = match client {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(error = %e, "Failed to create Discord client");
+                    // Wait before retrying client creation
+                    if wait_or_shutdown(&mut shutdown_rx, backoff).await {
+                        return; // Shutdown signaled
+                    }
+                    backoff = grow_backoff(backoff, max_backoff);
+                    continue;
+                }
+            };
+
+            connected.store(true, Ordering::SeqCst);
+            tracing::info!("Discord adapter connected");
+            backoff = base_backoff; // Reset on successful connect
+
+            tokio::select! {
+                result = client.start() => {
+                    connected.store(false, Ordering::SeqCst);
+                    match result {
+                        Err(e) => tracing::error!(error = %e, "Discord client disconnected"),
+                        Ok(()) => tracing::warn!("Discord client exited cleanly"),
+                    }
+                }
+                _ = &mut shutdown_rx => {
+                    tracing::info!("Discord adapter shutting down");
+                    client.shard_manager.shutdown_all().await;
+                    connected.store(false, Ordering::SeqCst);
+                    return; // Clean shutdown — no retry
                 }
             }
-            _ = &mut shutdown_rx => {
-                tracing::info!("Discord adapter shutting down");
-                client.shard_manager.shutdown_all().await;
-            }
-        }
 
-        connected.store(false, Ordering::SeqCst);
+            // Disconnected — wait with backoff before reconnecting
+            tracing::warn!(
+                delay_secs = backoff.as_secs(),
+                "Discord disconnected — reconnecting after backoff"
+            );
+            if wait_or_shutdown(&mut shutdown_rx, backoff).await {
+                return; // Shutdown signaled during backoff
+            }
+            backoff = grow_backoff(backoff, max_backoff);
+        }
     });
+}
+
+/// Build a serenity Client with the given handler and type_map entries.
+async fn build_discord_client(
+    token: &str,
+    handler: super::discord_handler::Handler,
+    hub_port: u16,
+    admin_ids: Vec<String>,
+    intents: GatewayIntents,
+) -> Result<serenity::Client, serenity::Error> {
+    serenity::Client::builder(token, intents)
+        .event_handler(handler)
+        .type_map_insert::<super::discord_cmd_handlers::HubPortKey>(hub_port)
+        .type_map_insert::<super::discord_cmd_handlers::AdminIdsKey>(admin_ids)
+        .await
+}
+
+/// Wait for `duration` or until shutdown is signaled.
+/// Returns `true` if shutdown was signaled, `false` if the timer expired.
+async fn wait_or_shutdown(
+    shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>,
+    duration: std::time::Duration,
+) -> bool {
+    tokio::select! {
+        _ = tokio::time::sleep(duration) => false,
+        _ = shutdown_rx => {
+            tracing::info!("Discord adapter shutdown during reconnect backoff");
+            true
+        }
+    }
+}
+
+/// Grow backoff with ±25% jitter, capped at `max`.
+fn grow_backoff(current: std::time::Duration, max: std::time::Duration) -> std::time::Duration {
+    let doubled = (current * 2).min(max);
+    // Simple jitter: ±25% using the current time's nanoseconds as entropy.
+    // No external RNG dependency needed.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    let jitter_pct = (nanos % 50) as f64 / 100.0 - 0.25; // -0.25 to +0.24
+    let jittered_ms = doubled.as_millis() as f64 * (1.0 + jitter_pct);
+    std::time::Duration::from_millis(jittered_ms.max(500.0) as u64)
 }
 
 /// Split a message into chunks that respect Discord's character limit.
@@ -466,5 +536,32 @@ mod tests {
         let status = adapter.status();
         assert!(!status.connected);
         assert_eq!(status.name, "Discord");
+    }
+
+    #[test]
+    fn test_backoff_growth() {
+        let d1 = std::time::Duration::from_secs(1);
+        let max = std::time::Duration::from_secs(60);
+        let d2 = grow_backoff(d1, max);
+        // Should be approximately 2s ±25%
+        assert!(d2.as_millis() >= 1500, "Backoff should grow: got {}ms", d2.as_millis());
+        assert!(d2.as_millis() <= 2500, "Backoff should not overshoot: got {}ms", d2.as_millis());
+    }
+
+    #[test]
+    fn test_backoff_cap() {
+        let max = std::time::Duration::from_secs(60);
+        let d = grow_backoff(std::time::Duration::from_secs(60), max);
+        // At the cap, doubled=60 (capped), jitter ±25% → 45-75s, but capped input stays ~60
+        assert!(d.as_secs() <= 75, "Backoff should cap near max: got {}s", d.as_secs());
+    }
+
+    #[test]
+    fn test_backoff_minimum() {
+        let min = std::time::Duration::from_millis(100);
+        let max = std::time::Duration::from_secs(60);
+        let d = grow_backoff(min, max);
+        // Even with negative jitter, should stay >= 500ms floor
+        assert!(d.as_millis() >= 500, "Backoff should have 500ms floor: got {}ms", d.as_millis());
     }
 }

@@ -10,6 +10,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 /// Serenity event handler that forwards messages to the adapter's channel.
+#[derive(Clone)]
 pub struct Handler {
     tx: mpsc::Sender<PlatformMessage>,
     interaction_tx: mpsc::Sender<PlatformInteraction>,
