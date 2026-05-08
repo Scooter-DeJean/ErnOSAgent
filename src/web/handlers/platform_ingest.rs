@@ -127,6 +127,12 @@ pub async fn platform_ingest(
         &state, provider, &mut messages, &tools, &msg, &session_id, result,
     ).await;
 
+    // Read session message count after dispatch (dispatch persists the assistant turn)
+    let msg_count = {
+        let sessions = state.sessions.read().await;
+        sessions.get(&session_id).map(|s| s.messages.len()).unwrap_or(0)
+    };
+
     Json(serde_json::json!({
         "success": true,
         "response": response,
@@ -136,6 +142,7 @@ pub async fn platform_ingest(
         "session_id": session_id,
         "has_plan": has_plan,
         "plan_markdown": plan_markdown,
+        "message_count": msg_count,
         "platform": msg.platform,
         "channel_id": msg.channel_id,
         "message_id": msg.message_id,

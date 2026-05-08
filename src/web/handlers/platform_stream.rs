@@ -326,12 +326,16 @@ async fn emit_reply(
     let _ = emit(tx, "audit", &serde_json::json!({
         "verdict": audit.verdict, "confidence": audit.confidence,
     })).await;
+
+    // Persist BEFORE emitting response — this lets us include the accurate
+    // message_count so the router builds buttons targeting the correct turn.
+    crate::web::ws_learning::ingest_assistant_turn(state, &audited, session_id).await;
+    let msg_count = get_session_message_count(state, session_id).await;
+
     let _ = emit(tx, "response", &serde_json::json!({
         "text": audited, "session_id": session_id, "has_plan": false,
+        "message_count": msg_count,
     })).await;
-
-    // Bug fix: persist assistant response to session so next turn has history
-    crate::web::ws_learning::ingest_assistant_turn(state, &audited, session_id).await;
 
     // SAE: extract activations from response
     super::sae_capture::spawn_activation_capture(state, &audited);
@@ -379,13 +383,14 @@ async fn emit_tool_chain(
         })).await;
     }
 
-    // Emit the actual reply
+    // Emit the actual reply — persist first for accurate message_count
+    crate::web::ws_learning::ingest_assistant_turn(state, &reply, session_id).await;
+    let msg_count = get_session_message_count(state, session_id).await;
+
     let _ = emit(tx, "response", &serde_json::json!({
         "text": reply, "session_id": session_id, "has_plan": false,
+        "message_count": msg_count,
     })).await;
-
-    // Persist to session
-    crate::web::ws_learning::ingest_assistant_turn(state, &reply, session_id).await;
 
     // SAE: extract activations from response
     super::sae_capture::spawn_activation_capture(state, &reply);
@@ -403,13 +408,24 @@ async fn emit_escalation(
         state, provider, messages, objective, plan.as_deref(), &msg.content, session_id, Some(tx),
     ).await;
     // Tool events already emitted live via sse_tx during the loop
+    // Persist escalation reply first for accurate message_count
+    crate::web::ws_learning::ingest_assistant_turn(state, &reply, session_id).await;
+    let msg_count = get_session_message_count(state, session_id).await;
+
     let _ = emit(tx, "response", &serde_json::json!({
         "text": reply, "session_id": session_id, "has_plan": false,
+        "message_count": msg_count,
     })).await;
-
-    // Persist escalation reply to session
-    crate::web::ws_learning::ingest_assistant_turn(state, &reply, session_id).await;
 
     // SAE: extract activations from response
     super::sae_capture::spawn_activation_capture(state, &reply);
+}
+
+/// Get the current message count for a session.
+/// Used to build response buttons that target the correct message index.
+async fn get_session_message_count(state: &AppState, session_id: &str) -> usize {
+    let sessions = state.sessions.read().await;
+    sessions.get(session_id)
+        .map(|s| s.messages.len())
+        .unwrap_or(0)
 }

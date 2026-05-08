@@ -185,6 +185,8 @@ async fn handle_speak(
 }
 
 /// Fetch a message's text from the session for TTS synthesis.
+/// When `message_index > 0`, looks up the specific message at that position.
+/// Falls back to the last assistant message when index is 0 or out of range.
 async fn fetch_message_text(
     hub_port: u16,
     interaction: &PlatformInteraction,
@@ -198,13 +200,21 @@ async fn fetch_message_text(
     let body: serde_json::Value = resp.json().await.ok()?;
     let messages = body["messages"].as_array()?;
 
-    // Find the last assistant message (or the one at message_index)
-    let msg = if interaction.message_index > 0 && interaction.message_index < messages.len() {
-        &messages[interaction.message_index]
-    } else {
-        messages.iter().rev().find(|m| m["role"].as_str() == Some("assistant"))?
-    };
-    msg["content"].as_str().map(|s| s.to_string())
+    // Try the specific index first (from the button's custom_id)
+    if interaction.message_index > 0 && interaction.message_index <= messages.len() {
+        // message_index is 1-based (count at time of creation); convert to 0-based
+        let idx = interaction.message_index - 1;
+        if let Some(msg) = messages.get(idx) {
+            if msg["role"].as_str() == Some("assistant") {
+                return msg["content"].as_str().map(|s| s.to_string());
+            }
+        }
+    }
+
+    // Fallback: last assistant message
+    messages.iter().rev()
+        .find(|m| m["role"].as_str() == Some("assistant"))
+        .and_then(|m| m["content"].as_str().map(|s| s.to_string()))
 }
 
 /// Send WAV audio bytes as a Discord file attachment.

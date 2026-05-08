@@ -320,9 +320,9 @@ fn build_buttons_for_response(
     if hub_resp.has_plan {
         discord_interaction::build_plan_buttons(session_id)
     } else {
-        // Message index 0 = latest response (router doesn't track index).
-        // The hub session_id is what matters for the API call.
-        discord_interaction::build_response_buttons(session_id, 0)
+        // Use the session's message count as the index so the TTS button
+        // targets the correct assistant turn, not always the latest.
+        discord_interaction::build_response_buttons(session_id, hub_resp.message_count)
     }
 }
 
@@ -387,6 +387,9 @@ pub(crate) struct HubResponse {
     pub(crate) session_id: Option<String>,
     pub(crate) has_plan: bool,
     pub(crate) plan_markdown: Option<String>,
+    /// Index of the assistant message in the session for button targeting.
+    /// Used by TTS/regenerate buttons to reference the correct turn.
+    pub(crate) message_count: usize,
 }
 
 /// Parse a hub JSON response body into a HubResponse.
@@ -399,6 +402,7 @@ pub(crate) fn parse_hub_response(body: serde_json::Value) -> HubResponse {
         session_id: body["session_id"].as_str().map(|s| s.to_string()),
         has_plan: body["has_plan"].as_bool().unwrap_or(false),
         plan_markdown: body["plan_markdown"].as_str().map(|s| s.to_string()),
+        message_count: body["message_count"].as_u64().unwrap_or(0) as usize,
     }
 }
 

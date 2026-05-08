@@ -66,6 +66,7 @@ async fn parse_sse_stream(
     let mut session_id = None;
     let mut has_plan = false;
     let mut plan_markdown = None;
+    let mut message_count: usize = 0;
     let mut sse_error: Option<String> = None;
     let mut last_thinking_post = std::time::Instant::now();
 
@@ -95,7 +96,7 @@ async fn parse_sse_stream(
                         &mut response, &mut thinking_buf,
                         &mut tool_events, &mut session_id,
                         &mut has_plan, &mut plan_markdown,
-                        &mut sse_error,
+                        &mut message_count, &mut sse_error,
                         registry, platform, thinking_thread_id,
                         &mut last_thinking_post,
                     ).await;
@@ -123,6 +124,7 @@ async fn parse_sse_stream(
         session_id,
         has_plan,
         plan_markdown,
+        message_count,
     })
 }
 
@@ -136,7 +138,7 @@ async fn handle_sse_event(
     tool_events: &mut Vec<serde_json::Value>,
     session_id: &mut Option<String>,
     has_plan: &mut bool, plan_markdown: &mut Option<String>,
-    sse_error: &mut Option<String>,
+    message_count: &mut usize, sse_error: &mut Option<String>,
     registry: &Arc<RwLock<PlatformRegistry>>,
     platform: &str, tid: &Option<String>,
     last_thinking_post: &mut std::time::Instant,
@@ -166,7 +168,7 @@ async fn handle_sse_event(
             }
         }
         "response" => {
-            extract_response(val, response, session_id, has_plan, plan_markdown);
+            extract_response(val, response, session_id, has_plan, plan_markdown, message_count);
         }
         "audit" => {
             // Audit data — logged but not currently accumulated into HubResponse.audit
@@ -193,7 +195,7 @@ async fn handle_sse_event(
         "" => {
             // Legacy: no event: line — use heuristic field-matching
             handle_legacy_event(val, response, thinking, tool_events,
-                session_id, has_plan, plan_markdown,
+                session_id, has_plan, plan_markdown, message_count,
                 registry, platform, tid, last_thinking_post).await;
         }
         other => {
@@ -207,6 +209,7 @@ fn extract_response(
     val: &serde_json::Value,
     response: &mut String, session_id: &mut Option<String>,
     has_plan: &mut bool, plan_markdown: &mut Option<String>,
+    message_count: &mut usize,
 ) {
     if let Some(text) = val.get("text").and_then(|v| v.as_str()) {
         *response = text.to_string();
@@ -220,6 +223,9 @@ fn extract_response(
     if let Some(pm) = val.get("plan_markdown").and_then(|v| v.as_str()) {
         *plan_markdown = Some(pm.to_string());
     }
+    if let Some(mc) = val.get("message_count").and_then(|v| v.as_u64()) {
+        *message_count = mc as usize;
+    }
 }
 
 /// Legacy heuristic dispatch when no `event:` line was present.
@@ -229,6 +235,7 @@ async fn handle_legacy_event(
     tool_events: &mut Vec<serde_json::Value>,
     session_id: &mut Option<String>,
     has_plan: &mut bool, plan_markdown: &mut Option<String>,
+    message_count: &mut usize,
     registry: &Arc<RwLock<PlatformRegistry>>,
     platform: &str, tid: &Option<String>,
     last_thinking_post: &mut std::time::Instant,
@@ -242,7 +249,7 @@ async fn handle_legacy_event(
             post_tool_event_live(registry, platform, tid, val).await;
         }
     } else if val.get("text").is_some() {
-        extract_response(val, response, session_id, has_plan, plan_markdown);
+        extract_response(val, response, session_id, has_plan, plan_markdown, message_count);
     } else if let Some(err) = val.get("error").and_then(|v| v.as_str()) {
         tracing::error!(error = %err, "SSE error (legacy dispatch)");
     }
@@ -337,16 +344,19 @@ mod tests {
             "session_id": "sess_123",
             "has_plan": true,
             "plan_markdown": "## Step 1",
+            "message_count": 5,
         });
         let mut response = String::new();
         let mut session_id = None;
         let mut has_plan = false;
         let mut plan_md = None;
-        extract_response(&val, &mut response, &mut session_id, &mut has_plan, &mut plan_md);
+        let mut msg_count = 0usize;
+        extract_response(&val, &mut response, &mut session_id, &mut has_plan, &mut plan_md, &mut msg_count);
         assert_eq!(response, "Hello world");
         assert_eq!(session_id.unwrap(), "sess_123");
         assert!(has_plan);
         assert_eq!(plan_md.unwrap(), "## Step 1");
+        assert_eq!(msg_count, 5);
     }
 
     #[test]
@@ -356,10 +366,12 @@ mod tests {
         let mut session_id = None;
         let mut has_plan = false;
         let mut plan_md = None;
-        extract_response(&val, &mut response, &mut session_id, &mut has_plan, &mut plan_md);
+        let mut msg_count = 0usize;
+        extract_response(&val, &mut response, &mut session_id, &mut has_plan, &mut plan_md, &mut msg_count);
         assert_eq!(response, "Hi");
         assert!(session_id.is_none());
         assert!(!has_plan);
         assert!(plan_md.is_none());
+        assert_eq!(msg_count, 0); // Not present in JSON → stays 0
     }
 }
