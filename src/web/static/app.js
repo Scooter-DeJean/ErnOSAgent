@@ -1493,7 +1493,7 @@ const ErnOS = (() => {
 
             // Load active sub-tab
             const activeTab = document.querySelector('#mesh-tabs .tier-tab.active');
-            const tabName = activeTab ? (activeTab.textContent.trim().toLowerCase()) : 'overview';
+            const tabName = activeTab ? (activeTab.textContent.trim().toLowerCase()) : 'dashboard';
             loadMeshTab(tabName, activeTab);
         } catch (e) {
             document.getElementById('mesh-status-label').textContent = 'Connection Error';
@@ -1529,304 +1529,210 @@ const ErnOS = (() => {
         c.innerHTML = '<div class="ern-empty"><div class="ern-empty-icon">⏳</div></div>';
         const err = msg => { c.innerHTML = `<div class="ern-empty"><div class="ern-empty-icon">⚠️</div><div class="ern-empty-title">${msg}</div></div>`; };
         try {
-            if (tab === 'overview') {
-                c.innerHTML = `<div class="ern-glass-card" style="text-align:center">
-                    <div style="font-size:36px;margin-bottom:8px">🌐</div>
-                    <div style="font-size:16px;font-weight:700;color:var(--text-primary);margin-bottom:6px">ErnMesh Network Active</div>
-                    <div style="font-size:13px;color:var(--text-muted);max-width:400px;margin:0 auto">Select a service tab above to interact with the decentralised mesh. Chat, mail, publish sites, trade ErnPoints — all peer-to-peer, no central servers.</div>
-                </div>`;
-            } else if (tab === 'chat') {
-                const tr = await fetch('/api/mesh/chat/topics'); const td = await tr.json();
-                const topics = td.topics || [];
-                c.innerHTML = `<div class="ern-chat-layout">
-                    <div class="ern-chat-sidebar">
-                        <div class="ern-chat-sidebar-header">
-                            <button class="ern-btn ern-btn-primary" style="width:100%" onclick="ErnOS.meshChatNewTopic()">+ New Topic</button>
-                        </div>
-                        <div class="ern-chat-topics-list" id="mesh-chat-topics">${topics.length === 0 ?
-                            '<div class="ern-empty" style="padding:24px 12px"><div class="ern-empty-icon">💬</div><div class="ern-empty-sub">No topics yet</div></div>' :
-                            topics.map(t => {
-                                const name = t.id.replace('ernmesh/chat/','');
-                                return `<div class="ern-chat-topic" onclick="ErnOS.meshChatLoad('${escapeHtml(name)}')">
-                                    <div class="ern-avatar-sm ern-avatar">${escapeHtml(name.charAt(0).toUpperCase())}</div>
-                                    <div style="flex:1;min-width:0"><div class="ern-chat-topic-name">${escapeHtml(name)}</div>
-                                    <div class="ern-chat-topic-count">${t.message_count} messages</div></div>
-                                </div>`;
-                            }).join('')}</div>
-                    </div>
-                    <div class="ern-chat-main">
-                        <div class="ern-chat-messages" id="mesh-chat-messages">
-                            <div class="ern-empty"><div class="ern-empty-icon">💬</div><div class="ern-empty-title">Select a topic</div><div class="ern-empty-sub">Choose a conversation from the sidebar</div></div>
-                        </div>
-                        <div class="ern-chat-input-bar">
-                            <input id="mesh-chat-input" type="text" class="ern-input" placeholder="Type a message..." style="flex:1" onkeydown="if(event.key==='Enter')ErnOS.meshChatSend()">
-                            <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshChatSend()">Send</button>
-                        </div>
-                    </div>
-                </div>`;
-            } else if (tab === 'mail') {
-                const ir = await fetch('/api/mesh/mail/inbox'); const id = await ir.json();
-                const msgs = id.messages || [];
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">✉️ ErnMail <span class="ern-badge">${id.unread ?? 0} unread</span></div>
-                    <div class="ern-action-bar">
-                        <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshMailCompose()">📝 Compose</button>
-                    </div>
-                </div>
-                <div class="ern-mail-toolbar">
-                    <button class="ern-mail-tab active" onclick="ErnOS.loadMeshTab('mail',null)">Inbox</button>
-                    <button class="ern-mail-tab" onclick="ErnOS.meshMailSent()">Sent</button>
-                </div>
-                ${msgs.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">📭</div><div class="ern-empty-title">Inbox is empty</div><div class="ern-empty-sub">Messages from other mesh peers will appear here</div></div>' :
-                `<table class="ern-table"><thead><tr><th>From</th><th>Subject</th><th>Date</th><th></th></tr></thead>
-                <tbody>${msgs.map(m => `<tr class="${m.read?'':'unread'}" style="cursor:pointer">
-                    <td class="ern-mail-from" onclick="ErnOS.meshMailRead('${escapeHtml(m.message_id)}')">${escapeHtml(m.from.substring(0,16))}…</td>
-                    <td class="ern-mail-subject" onclick="ErnOS.meshMailRead('${escapeHtml(m.message_id)}')">${escapeHtml(m.subject)}</td>
-                    <td class="ern-mail-date">${new Date(m.timestamp*1000).toLocaleString()}</td>
-                    <td><button class="ern-btn ern-btn-danger ern-btn-sm" onclick="ErnOS.meshMailDelete('${escapeHtml(m.message_id)}')">🗑</button></td>
-                </tr>`).join('')}</tbody></table>`}`;
-            } else if (tab === 'voice') {
-                const vr = await fetch('/api/mesh/voice/rooms'); const vd = await vr.json();
-                const rooms = vd.rooms || [];
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">🎙️ ErnVoice <span class="ern-badge">${rooms.length} rooms</span></div>
-                    <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshVoiceCreate()">+ Create Room</button>
-                </div>
-                ${rooms.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">🎙️</div><div class="ern-empty-title">No voice rooms</div><div class="ern-empty-sub">Create a room to start a voice conversation with peers</div></div>' :
-                `<div class="ern-voice-rooms">${rooms.map(r => `<div class="ern-voice-room">
-                    <div class="ern-voice-room-header">
-                        <div class="ern-voice-room-name">🎙️ ${escapeHtml(r.name)}</div>
-                        <span class="ern-badge">${r.participants}/${r.max_participants}</span>
-                    </div>
-                    <div class="ern-voice-participants">
-                        ${r.participants > 0 ? Array(r.participants).fill(0).map((_,i) => `<div class="ern-voice-user"><div class="ern-avatar-sm ern-avatar">P${i+1}</div>Peer ${i+1}</div>`).join('') : '<div style="font-size:12px;color:var(--text-muted)">No participants yet</div>'}
-                    </div>
-                    ${r.needs_sfu ? '<div class="ern-badge-yellow ern-badge" style="margin-bottom:10px">SFU Required</div>' : ''}
-                    <button class="ern-btn ern-btn-ghost" style="width:100%" onclick="ErnOS.meshVoiceJoin('${escapeHtml(r.room_id)}')">Join Room</button>
-                </div>`).join('')}</div>`}`;
-            } else if (tab === 'forum') {
-                const fr = await fetch('/api/mesh/forum/communities'); const fd = await fr.json();
-                const comms = fd.communities || [];
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">📋 ErnForum <span class="ern-badge">${comms.length} communities</span></div>
-                    <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshForumCreate()">+ New Community</button>
-                </div>
-                ${comms.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">📋</div><div class="ern-empty-title">No communities yet</div><div class="ern-empty-sub">Create a community to start forum discussions with mesh peers</div></div>' :
-                `<div class="ern-forum-communities">${comms.map(cm => `<div class="ern-forum-card" onclick="ErnOS.meshForumThreads('${escapeHtml(cm.name)}')">
-                    <div class="ern-forum-card-icon">📋</div>
-                    <div class="ern-forum-card-name">${escapeHtml(cm.name)}</div>
-                    <div class="ern-forum-card-desc">${escapeHtml(cm.description || 'No description')}</div>
-                </div>`).join('')}</div>`}`;
-            } else if (tab === 'feed') {
-                const fr = await fetch('/api/mesh/feed'); const fd = await fr.json();
-                const posts = fd.posts || [];
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">📰 ErnieBook <span class="ern-badge">${posts.length} posts</span></div>
-                </div>
-                <div class="ern-feed-composer">
-                    <div class="ern-feed-composer-header">
-                        <div class="ern-avatar">E</div>
-                        <div style="font-size:13px;font-weight:600;color:var(--text-primary)">Share something with the mesh</div>
-                    </div>
-                    <textarea id="mesh-feed-input" class="ern-textarea" rows="3" placeholder="What's on your mind?"></textarea>
-                    <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-                        <input id="mesh-feed-tags" class="ern-input" placeholder="Tags (comma-separated)" style="flex:1">
-                        <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshFeedPost()">📤 Post</button>
-                    </div>
-                </div>
-                ${posts.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">📰</div><div class="ern-empty-title">No posts yet</div><div class="ern-empty-sub">Be the first to share something on ErnieBook</div></div>' :
-                posts.map(p => `<div class="ern-feed-post">
-                    <div class="ern-feed-post-header">
-                        <div class="ern-avatar">${escapeHtml((p.display_name || p.author || '?').charAt(0).toUpperCase())}</div>
-                        <div><div class="ern-feed-post-author">${escapeHtml(p.display_name || p.author.substring(0,12))}</div>
-                        <div class="ern-feed-post-time">${new Date(p.timestamp*1000).toLocaleString()}</div></div>
-                    </div>
-                    <div class="ern-feed-post-content">${escapeHtml(p.content)}</div>
-                    ${p.tags?.length ? `<div class="ern-feed-post-tags">${p.tags.map(t=>`<span class="ern-tag">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
-                    <div class="ern-feed-post-actions">
-                        <div class="ern-feed-action">❤️ Like</div>
-                        <div class="ern-feed-action">🔄 Share</div>
-                        <div class="ern-feed-action">💬 Comment</div>
-                    </div>
-                </div>`).join('')}`;
-            } else if (tab === 'economy') {
-                const br = await fetch('/api/mesh/economy/balance'); const bd = await br.json();
-                const tr2 = await fetch('/api/mesh/economy/transactions'); const txd = await tr2.json();
-                const txs = txd.transactions || [];
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">💰 ErnWallet</div>
-                </div>
-                <div class="ern-wallet-hero">
-                    <div class="ern-wallet-balance">${(bd.balance ?? 0).toFixed(2)}</div>
-                    <div class="ern-wallet-label">ErnPoints</div>
-                    <div class="ern-wallet-meta">${bd.transaction_count ?? 0} transactions</div>
-                </div>
-                ${txs.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">💰</div><div class="ern-empty-title">No transactions yet</div><div class="ern-empty-sub">Start earning ErnPoints by contributing to the mesh network</div></div>' :
-                `<table class="ern-table"><thead><tr><th>#</th><th>Type</th><th>Reason</th><th>Amount</th><th>Balance</th></tr></thead>
-                <tbody>${txs.map(tx => `<tr>
-                    <td class="ern-mono">${tx.id}</td>
-                    <td><span class="ern-tx-type ${tx.direction}">${tx.direction}</span></td>
-                    <td style="font-size:11px;max-width:200px;overflow:hidden;text-overflow:ellipsis">${escapeHtml(tx.reason)}</td>
-                    <td class="${tx.direction==='earn'?'ern-tx-earn':'ern-tx-spend'}" style="font-weight:700">${tx.direction==='earn'?'+':'−'}${tx.amount.toFixed(2)}</td>
-                    <td class="ern-mono">${tx.balance_after.toFixed(2)}</td>
-                </tr>`).join('')}</tbody></table>`}`;
-            } else if (tab === 'reputation') {
-                const rr = await fetch('/api/mesh/reputation'); const rd = await rr.json();
-                const peers = rd.peers || [];
-                const trusted = peers.filter(p=>p.is_trusted).length;
-                const hostile = peers.filter(p=>p.is_hostile).length;
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">⭐ Trust Network <span class="ern-badge">${peers.length} peers</span></div>
-                </div>
-                <div class="ern-rep-summary">
-                    <div class="ern-rep-stat"><div class="ern-rep-stat-value">${peers.length}</div><div class="ern-rep-stat-label">Total Peers</div></div>
-                    <div class="ern-rep-stat"><div class="ern-rep-stat-value" style="color:#22c55e">${trusted}</div><div class="ern-rep-stat-label">Trusted</div></div>
-                    <div class="ern-rep-stat"><div class="ern-rep-stat-value" style="color:var(--error)">${hostile}</div><div class="ern-rep-stat-label">Hostile</div></div>
-                </div>
-                ${peers.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">⭐</div><div class="ern-empty-title">No peers tracked</div><div class="ern-empty-sub">Peer reputation scores will appear as you interact on the mesh</div></div>' :
-                `<div class="ern-rep-cards">${peers.map(p => {
-                    const pct = Math.min(100, Math.max(0, (p.score + 100) / 2));
-                    const color = p.is_trusted ? '#22c55e' : p.is_hostile ? 'var(--error)' : 'var(--accent)';
-                    const badge = p.is_trusted ? '<span class="ern-trust-badge ern-trust-trusted">✓ Trusted</span>' : p.is_hostile ? '<span class="ern-trust-badge ern-trust-hostile">⚠ Hostile</span>' : '<span class="ern-trust-badge ern-trust-neutral">Neutral</span>';
-                    return `<div class="ern-rep-card">
-                        <div class="ern-rep-card-header">
-                            <div style="display:flex;align-items:center;gap:8px">
-                                <div class="ern-avatar-sm ern-avatar">${escapeHtml(p.peer_id.charAt(0).toUpperCase())}</div>
-                                <span class="ern-mono">${escapeHtml(p.peer_id.substring(0,16))}…</span>
-                            </div>
-                            <div class="ern-rep-card-score" style="color:${color}">${p.score.toFixed(1)}</div>
-                        </div>
-                        <div class="ern-rep-bar-track"><div class="ern-rep-bar-fill" style="width:${pct}%;background:${color}"></div></div>
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px">
-                            <div style="display:flex;gap:12px;font-size:11px;color:var(--text-muted)">
-                                <span style="color:#22c55e">+${p.positive_events}</span>
-                                <span style="color:var(--error)">−${p.negative_events}</span>
-                            </div>
-                            <div style="display:flex;gap:4px">
-                                ${badge}
-                                <button class="ern-btn ern-btn-ghost ern-btn-sm" onclick="ErnOS.meshTrust('${escapeHtml(p.peer_id)}',10)">+Trust</button>
-                                <button class="ern-btn ern-btn-danger ern-btn-sm" onclick="ErnOS.meshTrust('${escapeHtml(p.peer_id)}',-100)">Block</button>
-                            </div>
-                        </div>
-                    </div>`;
-                }).join('')}</div>`}`;
-            } else if (tab === 'sites') {
-                const sr = await fetch('/api/mesh/sites'); const sd = await sr.json();
-                const sites = sd.sites || [];
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">🌐 ErnSites <span class="ern-badge">${sites.length} hosted</span></div>
-                    <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshSitePublish && ErnOS.meshSitePublish()">📤 Publish Site</button>
-                </div>
-                ${sites.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">🌐</div><div class="ern-empty-title">No sites hosted</div><div class="ern-empty-sub">Publish a website to host it on the decentralised mesh network</div></div>' :
-                `<div class="ern-site-cards">${sites.map(s => `<div class="ern-site-card">
-                    <div class="ern-site-card-header"><div class="ern-site-card-icon">🌐</div><div class="ern-site-card-name">${escapeHtml(s.name)}</div></div>
-                    <div class="ern-site-card-desc">${escapeHtml(s.description||'No description')}</div>
-                    <div class="ern-site-card-meta"><span class="ern-badge">v${s.version}</span><span class="ern-badge">${s.file_count} files</span></div>
-                    <div class="ern-site-card-actions">
-                        <button class="ern-btn ern-btn-ghost ern-btn-sm" onclick="window.open('/api/mesh/sites/browse/${encodeURIComponent(s.name)}/index.html','_blank')">🔗 Browse</button>
-                        <button class="ern-btn ern-btn-danger ern-btn-sm" onclick="ErnOS.meshSiteRemove('${escapeHtml(s.name)}')">🗑 Remove</button>
-                    </div>
-                </div>`).join('')}</div>`}`;
-            } else if (tab === 'relay') {
-                const rr = await fetch('/api/mesh/relay'); const rd = await rr.json();
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">📡 Relay Network <span class="ern-badge">${rd.enabled?'Enabled':'Disabled'}</span></div>
-                </div>
-                <div class="ern-relay-stats">
-                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${rd.enabled?'✅':'❌'}</div><div class="ern-relay-stat-label">Status</div></div>
-                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${rd.active_sessions ?? 0}</div><div class="ern-relay-stat-label">Active Sessions</div></div>
-                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${(rd.total_mb_relayed ?? 0).toFixed(1)}</div><div class="ern-relay-stat-label">MB Relayed</div></div>
-                </div>
-                ${(rd.active_sessions ?? 0) === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">📡</div><div class="ern-empty-title">No active relay sessions</div><div class="ern-empty-sub">Relay sessions appear when peers route traffic through your node</div></div>' : ''}`;
-            } else if (tab === 'files') {
-                const tr3 = await fetch('/api/mesh/transfers'); const td2 = await tr3.json();
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">📁 File Transfers <span class="ern-badge">${td2.active_count ?? 0} active</span></div>
-                </div>
-                <div class="ern-relay-stats" style="margin-bottom:16px">
-                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${td2.active_count ?? 0}</div><div class="ern-relay-stat-label">Active</div></div>
-                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${td2.total_count ?? 0}</div><div class="ern-relay-stat-label">Total</div></div>
-                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${(td2.total_count??0)-(td2.active_count??0)}</div><div class="ern-relay-stat-label">Completed</div></div>
-                </div>
-                ${(td2.active_count ?? 0) === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">📁</div><div class="ern-empty-title">No active transfers</div><div class="ern-empty-sub">Send files to peers from the chat to start a transfer</div></div>' : ''}`;
-            } else if (tab === 'contacts') {
-                const resp = await fetch('/api/mesh/contacts'); const data = await resp.json();
-                const reqResp = await fetch('/api/mesh/contacts/requests'); const reqData = await reqResp.json();
-                const contacts = data.contacts || [];
-                const inbound = reqData.inbound || [];
-                const contactCards = contacts.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">👤</div><div class="ern-empty-title">No contacts yet</div><div class="ern-empty-sub">Add peers by their PeerId to start messaging</div></div>' :
-                    contacts.map(ct => `<div class="ern-contact-card" onclick="ErnOS.meshContactDM('${escapeHtml(ct.peer_id)}')">
-                        <div class="${ct.status === 'Online' ? 'ern-online-dot' : 'ern-offline-dot'}"></div>
-                        <div style="flex:1;min-width:0">
-                            <div class="ern-contact-name">${escapeHtml(ct.display_name)}</div>
-                            <div class="ern-contact-status">${ct.status === 'Online' ? 'Online' : ct.last_seen ? 'Last seen ' + new Date(ct.last_seen * 1000).toLocaleDateString() : 'Offline'}</div>
-                        </div>
-                        ${ct.blocked ? '<span class="ern-badge" style="background:var(--error)">Blocked</span>' : ''}
-                    </div>`).join('');
-                const requestCards = inbound.length === 0 ? '' :
-                    `<div class="ern-section-title" style="margin-top:16px">📩 Pending Requests <span class="ern-badge">${inbound.length}</span></div>` +
-                    inbound.map(r => `<div class="ern-request-card">
-                        <div style="flex:1"><div class="ern-contact-name">${escapeHtml(r.display_name)}</div><div class="ern-contact-status">${escapeHtml(r.from.substring(0,16))}…</div></div>
-                        <div class="ern-request-actions">
-                            <button class="ern-btn ern-btn-primary" style="padding:4px 12px;font-size:11px" onclick="ErnOS.meshContactAccept('${escapeHtml(r.from)}')">Accept</button>
-                            <button class="ern-btn ern-btn-ghost" style="padding:4px 12px;font-size:11px" onclick="ErnOS.meshContactBlock('${escapeHtml(r.from)}')">Block</button>
-                        </div>
-                    </div>`).join('');
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">👤 Contacts <span class="ern-badge">${data.total ?? 0}</span></div>
-                    <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshContactAdd()">+ Add Contact</button>
-                </div>
-                ${contactCards}${requestCards}`;
-            } else if (tab === 'groups') {
-                const resp = await fetch('/api/mesh/groups'); const data = await resp.json();
-                const groups = data.groups || [];
-                const groupCards = groups.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">👥</div><div class="ern-empty-title">No groups yet</div><div class="ern-empty-sub">Create a group to start messaging with multiple peers</div></div>' :
-                    groups.map(g => `<div class="ern-group-card" onclick="ErnOS.meshGroupOpen('${escapeHtml(g.id)}')">
-                        <div class="ern-group-emoji">${g.emoji || '👥'}</div>
-                        <div class="ern-group-info">
-                            <div class="ern-group-name">${escapeHtml(g.name)}</div>
-                            <div class="ern-group-meta">${g.member_count} member${g.member_count !== 1 ? 's' : ''} · Created ${new Date(g.created_at * 1000).toLocaleDateString()}</div>
-                        </div>
-                    </div>`).join('');
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">👥 Groups <span class="ern-badge">${data.total ?? 0}</span></div>
-                    <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshGroupCreate()">+ New Group</button>
-                </div>
-                ${data.pending_invites > 0 ? '<div class="ern-badge" style="margin-bottom:12px;background:rgba(0,255,136,0.15)">'+data.pending_invites+' pending invite(s)</div>' : ''}
-                ${groupCards}`;
-            } else if (tab === 'peers') {
-                const resp = await fetch('/api/mesh/peers'); const data = await resp.json();
-                if (!data.peers || data.peers.length === 0) {
-                    c.innerHTML = '<div class="ern-empty"><div class="ern-empty-icon">🛰️</div><div class="ern-empty-title">No peers discovered yet</div><div class="ern-empty-sub">Other ErnMesh nodes on your network will appear here via mDNS discovery</div></div>';
-                    return;
-                }
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">🛰️ Discovered Peers <span class="ern-badge">${data.total}</span></div>
-                </div>
-                <div class="ern-peer-cards">${data.peers.map(p => `<div class="ern-peer-card">
-                    <div class="ern-peer-card-header">
-                        <div class="ern-avatar">${escapeHtml((p.peer_id||'?').charAt(0).toUpperCase())}</div>
-                        <div style="flex:1;min-width:0">
-                            <div class="ern-mono" style="font-size:12px;color:var(--text-primary)">${escapeHtml((p.peer_id||'').substring(0,20))}…</div>
-                            <span class="ern-badge" style="margin-top:4px">${escapeHtml(p.method||'unknown')}</span>
-                        </div>
-                    </div>
-                    ${(p.addrs||[]).length > 0 ? (p.addrs||[]).map(a=>`<div class="ern-peer-addr">${escapeHtml(a)}</div>`).join('') : '<div style="font-size:11px;color:var(--text-muted)">No addresses</div>'}
-                </div>`).join('')}</div>`;
-            } else if (tab === 'capabilities' || tab === 'caps') {
-                const resp = await fetch('/api/mesh/capabilities'); const data = await resp.json();
-                const caps = data.available_capabilities || [];
-                c.innerHTML = `<div class="ern-section-header">
-                    <div class="ern-section-title">🔑 Capability System <span class="ern-badge">${data.peer_count??0} peers</span></div>
-                </div>
-                ${caps.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">🔑</div><div class="ern-empty-title">No capabilities defined</div></div>' :
-                `<div class="ern-cap-grid">${caps.map(cap => `<div class="ern-cap-tile">
-                    <div class="ern-cap-tile-icon">${capIcon(cap)}</div>
-                    <div class="ern-cap-tile-name">${escapeHtml(cap)}</div>
-                </div>`).join('')}</div>`}`;
-            }
+            if (tab === 'dashboard') { await renderDashboard(c); }
+            else if (tab === 'social') { renderSocialShell(c, 'chat'); }
+            else if (tab === 'people') { await renderPeople(c, 'contacts'); }
+            else if (tab === 'sites') { await renderSitesTab(c); }
         } catch (e) { err('Failed to load ' + tab); }
     }
+
+    // ─── Dashboard (absorbs economy, reputation, relay, files, peers, caps) ───
+    async function renderDashboard(c) {
+        const [ecoBal, ecoTx, repData, relayData, txData, peersData, capsData] = await Promise.all([
+            fetch('/api/mesh/economy/balance').then(r=>r.json()),
+            fetch('/api/mesh/economy/transactions').then(r=>r.json()),
+            fetch('/api/mesh/reputation').then(r=>r.json()),
+            fetch('/api/mesh/relay').then(r=>r.json()),
+            fetch('/api/mesh/transfers').then(r=>r.json()),
+            fetch('/api/mesh/peers').then(r=>r.json()),
+            fetch('/api/mesh/capabilities').then(r=>r.json()),
+        ]);
+        const txs = (ecoTx.transactions || []).slice(0, 5);
+        const peers = repData.peers || [];
+        const trusted = peers.filter(p=>p.is_trusted).length;
+        const hostile = peers.filter(p=>p.is_hostile).length;
+        const discPeers = peersData.peers || [];
+        const caps = capsData.available_capabilities || [];
+        c.innerHTML = `<div class="ern-dash-grid">
+            <div class="ern-dash-widget">
+                <div class="ern-dash-widget-title">💰 Wallet</div>
+                <div class="ern-wallet-hero" style="margin-bottom:8px">
+                    <div class="ern-wallet-balance">${(ecoBal.balance??0).toFixed(2)}</div>
+                    <div class="ern-wallet-label">ErnPoints</div>
+                </div>
+                ${txs.length===0?'<div style="font-size:11px;color:var(--text-muted)">No transactions yet</div>':
+                txs.map(tx=>`<div class="ern-tx-mini"><span>${escapeHtml(tx.reason||'').substring(0,30)}</span><span class="${tx.direction==='earn'?'ern-tx-earn':'ern-tx-spend'}" style="font-weight:700">${tx.direction==='earn'?'+':'−'}${tx.amount.toFixed(2)}</span></div>`).join('')}
+            </div>
+            <div class="ern-dash-widget">
+                <div class="ern-dash-widget-title">⭐ Reputation <span class="ern-badge">${peers.length} peers</span></div>
+                <div class="ern-relay-stats" style="margin-bottom:8px">
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value" style="color:#22c55e">${trusted}</div><div class="ern-relay-stat-label">Trusted</div></div>
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value" style="color:var(--error)">${hostile}</div><div class="ern-relay-stat-label">Hostile</div></div>
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${peers.length-trusted-hostile}</div><div class="ern-relay-stat-label">Neutral</div></div>
+                </div>
+                ${peers.length===0?'<div style="font-size:11px;color:var(--text-muted)">Interact on the mesh to build reputation data</div>':''}
+            </div>
+            <div class="ern-dash-widget">
+                <div class="ern-dash-widget-title">📡 Relay</div>
+                <div class="ern-relay-stats">
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${relayData.enabled?'✅':'❌'}</div><div class="ern-relay-stat-label">Status</div></div>
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${relayData.active_sessions??0}</div><div class="ern-relay-stat-label">Sessions</div></div>
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${(relayData.total_mb_relayed??0).toFixed(1)}</div><div class="ern-relay-stat-label">MB Relayed</div></div>
+                </div>
+            </div>
+            <div class="ern-dash-widget">
+                <div class="ern-dash-widget-title">📁 Transfers</div>
+                <div class="ern-relay-stats">
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${txData.active_count??0}</div><div class="ern-relay-stat-label">Active</div></div>
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${txData.total_count??0}</div><div class="ern-relay-stat-label">Total</div></div>
+                    <div class="ern-relay-stat"><div class="ern-relay-stat-value">${(txData.total_count??0)-(txData.active_count??0)}</div><div class="ern-relay-stat-label">Done</div></div>
+                </div>
+            </div>
+            <div class="ern-dash-widget ern-dash-widget-full">
+                <div class="ern-dash-widget-title">🛰️ Discovered Peers <span class="ern-badge">${discPeers.length}</span></div>
+                ${discPeers.length===0?'<div style="font-size:11px;color:var(--text-muted)">Other ErnMesh nodes on your LAN will appear here via mDNS</div>':
+                `<div class="ern-peer-cards">${discPeers.map(p=>`<div class="ern-peer-card"><div class="ern-peer-card-header"><div class="ern-avatar">${escapeHtml((p.peer_id||'?').charAt(0).toUpperCase())}</div><div style="flex:1;min-width:0"><div class="ern-mono" style="font-size:12px;color:var(--text-primary)">${escapeHtml((p.peer_id||'').substring(0,20))}…</div><span class="ern-badge" style="margin-top:4px">${escapeHtml(p.method||'unknown')}</span></div></div></div>`).join('')}</div>`}
+            </div>
+            ${caps.length>0?`<div class="ern-dash-widget ern-dash-widget-full">
+                <div class="ern-dash-widget-title">🔑 Capabilities <span class="ern-badge">${capsData.peer_count??0} peers</span></div>
+                <div class="ern-cap-grid">${caps.map(cap=>`<div class="ern-cap-tile"><div class="ern-cap-tile-icon">${capIcon(cap)}</div><div class="ern-cap-tile-name">${escapeHtml(cap)}</div></div>`).join('')}</div>
+            </div>`:''}
+        </div>`;
+    }
+
+    // ─── Social shell (sidebar mode switcher) ───
+    window._socialMode = 'chat';
+    function renderSocialShell(c, mode) {
+        window._socialMode = mode || 'chat';
+        const modes = [
+            {id:'chat',icon:'💬',label:'Chat'},{id:'mail',icon:'✉️',label:'Mail'},
+            {id:'voice',icon:'🎙️',label:'Voice'},{id:'forum',icon:'📋',label:'Forum'},
+            {id:'feed',icon:'📰',label:'Feed'}
+        ];
+        c.innerHTML = `<div class="ern-social-layout">
+            <div class="ern-social-sidebar">${modes.map(m=>
+                `<div class="ern-social-mode ${m.id===window._socialMode?'active':''}" onclick="ErnOS.loadSocialMode('${m.id}')">
+                    <div class="ern-social-mode-icon">${m.icon}</div>${m.label}
+                </div>`).join('')}
+            </div>
+            <div class="ern-social-main" id="social-content"><div class="ern-empty"><div class="ern-empty-icon">⏳</div></div></div>
+        </div>`;
+        loadSocialMode(window._socialMode);
+    }
+
+    async function loadSocialMode(mode) {
+        window._socialMode = mode;
+        document.querySelectorAll('.ern-social-mode').forEach(m => {
+            m.classList.toggle('active', m.textContent.trim().toLowerCase() === mode);
+        });
+        const c = document.getElementById('social-content');
+        if (!c) return;
+        c.innerHTML = '<div class="ern-empty"><div class="ern-empty-icon">⏳</div></div>';
+        try {
+            if (mode === 'chat') { await renderChatContent(c); }
+            else if (mode === 'mail') { await renderMailContent(c); }
+            else if (mode === 'voice') { await renderVoiceContent(c); }
+            else if (mode === 'forum') { await renderForumContent(c); }
+            else if (mode === 'feed') { await renderFeedContent(c); }
+        } catch(e) { c.innerHTML = '<div class="ern-empty"><div class="ern-empty-icon">⚠️</div><div class="ern-empty-title">Failed to load</div></div>'; }
+    }
+
+    async function renderChatContent(c) {
+        const tr = await fetch('/api/mesh/chat/topics'); const td = await tr.json();
+        const topics = td.topics || [];
+        c.innerHTML = `<div class="ern-chat-layout" style="height:100%">
+            <div class="ern-chat-sidebar">
+                <div class="ern-chat-sidebar-header"><button class="ern-btn ern-btn-primary" style="width:100%" onclick="ErnOS.meshChatNewTopic()">+ New Topic</button></div>
+                <div class="ern-chat-topics-list" id="mesh-chat-topics">${topics.length===0?
+                    '<div class="ern-empty" style="padding:24px 12px"><div class="ern-empty-icon">💬</div><div class="ern-empty-sub">No topics yet</div></div>':
+                    topics.map(t=>{const name=t.id.replace('ernmesh/chat/','');return `<div class="ern-chat-topic" onclick="ErnOS.meshChatLoad('${escapeHtml(name)}')"><div class="ern-avatar-sm ern-avatar">${escapeHtml(name.charAt(0).toUpperCase())}</div><div style="flex:1;min-width:0"><div class="ern-chat-topic-name">${escapeHtml(name)}</div><div class="ern-chat-topic-count">${t.message_count} messages</div></div></div>`;}).join('')}</div>
+            </div>
+            <div class="ern-chat-main">
+                <div class="ern-chat-messages" id="mesh-chat-messages"><div class="ern-empty"><div class="ern-empty-icon">💬</div><div class="ern-empty-title">Select a topic</div></div></div>
+                <div class="ern-chat-input-bar"><input type="text" class="ern-chat-input" id="mesh-chat-input" placeholder="Type a message…" onkeydown="if(event.key==='Enter')ErnOS.meshChatSend()"><button class="ern-btn ern-btn-primary" onclick="ErnOS.meshChatSend()">Send</button></div>
+            </div>
+        </div>`;
+    }
+
+    async function renderMailContent(c) {
+        const ir = await fetch('/api/mesh/mail/inbox'); const id = await ir.json();
+        const msgs = id.messages || [];
+        c.innerHTML = `<div style="padding:16px"><div class="ern-section-header"><div class="ern-section-title">✉️ ErnMail <span class="ern-badge">${id.unread??0} unread</span></div><div class="ern-action-bar"><button class="ern-btn ern-btn-primary" onclick="ErnOS.meshMailCompose()">📝 Compose</button></div></div>
+        <div class="ern-mail-toolbar"><button class="ern-mail-tab active" onclick="ErnOS.loadSocialMode('mail')">Inbox</button><button class="ern-mail-tab" onclick="ErnOS.meshMailSent()">Sent</button></div>
+        ${msgs.length===0?'<div class="ern-empty"><div class="ern-empty-icon">📭</div><div class="ern-empty-title">Inbox is empty</div><div class="ern-empty-sub">Messages from other mesh peers will appear here</div></div>':
+        `<table class="ern-table"><thead><tr><th>From</th><th>Subject</th><th>Date</th><th></th></tr></thead><tbody>${msgs.map(m=>`<tr class="${m.read?'':'unread'}" style="cursor:pointer"><td class="ern-mail-from" onclick="ErnOS.meshMailRead('${escapeHtml(m.message_id)}')">${escapeHtml(m.from.substring(0,16))}…</td><td class="ern-mail-subject" onclick="ErnOS.meshMailRead('${escapeHtml(m.message_id)}')">${escapeHtml(m.subject)}</td><td class="ern-mail-date">${new Date(m.timestamp*1000).toLocaleString()}</td><td><button class="ern-btn ern-btn-danger ern-btn-sm" onclick="ErnOS.meshMailDelete('${escapeHtml(m.message_id)}')">🗑</button></td></tr>`).join('')}</tbody></table>`}</div>`;
+    }
+
+    async function renderVoiceContent(c) {
+        const vr = await fetch('/api/mesh/voice/rooms'); const vd = await vr.json();
+        const rooms = vd.rooms || [];
+        c.innerHTML = `<div style="padding:16px"><div class="ern-section-header"><div class="ern-section-title">🎙️ ErnVoice <span class="ern-badge">${rooms.length} rooms</span></div><button class="ern-btn ern-btn-primary" onclick="ErnOS.meshVoiceCreate()">+ Create Room</button></div>
+        ${rooms.length===0?'<div class="ern-empty"><div class="ern-empty-icon">🎙️</div><div class="ern-empty-title">No voice rooms</div><div class="ern-empty-sub">Create a room to start a voice conversation with peers</div></div>':
+        `<div class="ern-voice-rooms">${rooms.map(r=>`<div class="ern-voice-room"><div class="ern-voice-room-header"><div class="ern-voice-room-name">🎙️ ${escapeHtml(r.name)}</div><span class="ern-badge">${r.participants}/${r.max_participants}</span></div><button class="ern-btn ern-btn-ghost" style="width:100%" onclick="ErnOS.meshVoiceJoin('${escapeHtml(r.room_id)}')">Join Room</button></div>`).join('')}</div>`}</div>`;
+    }
+
+    async function renderForumContent(c) {
+        const fr = await fetch('/api/mesh/forum/communities'); const fd = await fr.json();
+        const comms = fd.communities || [];
+        c.innerHTML = `<div style="padding:16px"><div class="ern-section-header"><div class="ern-section-title">📋 ErnForum <span class="ern-badge">${comms.length} communities</span></div><button class="ern-btn ern-btn-primary" onclick="ErnOS.meshForumCreate()">+ New Community</button></div>
+        ${comms.length===0?'<div class="ern-empty"><div class="ern-empty-icon">📋</div><div class="ern-empty-title">No communities yet</div><div class="ern-empty-sub">Create a community to start forum discussions</div></div>':
+        `<div class="ern-forum-communities">${comms.map(cm=>`<div class="ern-forum-card" onclick="ErnOS.meshForumThreads('${escapeHtml(cm.name)}')"><div class="ern-forum-card-icon">📋</div><div class="ern-forum-card-name">${escapeHtml(cm.name)}</div><div class="ern-forum-card-desc">${escapeHtml(cm.description||'No description')}</div></div>`).join('')}</div>`}</div>`;
+    }
+
+    async function renderFeedContent(c) {
+        const fr = await fetch('/api/mesh/feed'); const fd = await fr.json();
+        const posts = fd.posts || [];
+        c.innerHTML = `<div style="padding:16px"><div class="ern-section-header"><div class="ern-section-title">📰 ErnieBook <span class="ern-badge">${posts.length} posts</span></div></div>
+        <div class="ern-feed-composer"><div class="ern-feed-composer-header"><div class="ern-avatar">E</div><div style="font-size:13px;font-weight:600;color:var(--text-primary)">Share something with the mesh</div></div>
+        <textarea id="mesh-feed-input" class="ern-textarea" rows="3" placeholder="What's on your mind?"></textarea>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><input id="mesh-feed-tags" class="ern-input" placeholder="Tags (comma-separated)" style="flex:1"><button class="ern-btn ern-btn-primary" onclick="ErnOS.meshFeedPost()">📤 Post</button></div></div>
+        ${posts.length===0?'<div class="ern-empty"><div class="ern-empty-icon">📰</div><div class="ern-empty-title">No posts yet</div></div>':
+        posts.map(p=>`<div class="ern-feed-post"><div class="ern-feed-post-header"><div class="ern-avatar">${escapeHtml((p.display_name||p.author||'?').charAt(0).toUpperCase())}</div><div><div class="ern-feed-post-author">${escapeHtml(p.display_name||p.author.substring(0,12))}</div><div class="ern-feed-post-time">${new Date(p.timestamp*1000).toLocaleString()}</div></div></div><div class="ern-feed-post-content">${escapeHtml(p.content)}</div>${p.tags?.length?`<div class="ern-feed-post-tags">${p.tags.map(t=>`<span class="ern-tag">${escapeHtml(t)}</span>`).join('')}</div>`:''}<div class="ern-feed-post-actions"><div class="ern-feed-action">❤️ Like</div><div class="ern-feed-action">🔄 Share</div><div class="ern-feed-action">💬 Comment</div></div></div>`).join('')}</div>`;
+    }
+
+    // ─── People tab (contacts + groups toggle) ───
+    window._peopleView = 'contacts';
+    async function renderPeople(c, view) {
+        window._peopleView = view || 'contacts';
+        const isContacts = window._peopleView === 'contacts';
+        let content = '';
+        if (isContacts) {
+            const resp = await fetch('/api/mesh/contacts'); const data = await resp.json();
+            const reqResp = await fetch('/api/mesh/contacts/requests'); const reqData = await reqResp.json();
+            const contacts = data.contacts || []; const inbound = reqData.inbound || [];
+            const cards = contacts.length===0?'<div class="ern-empty"><div class="ern-empty-icon">👤</div><div class="ern-empty-title">No contacts yet</div><div class="ern-empty-sub">Add peers by their PeerId to start messaging</div></div>':
+                contacts.map(ct=>`<div class="ern-contact-card" onclick="ErnOS.meshContactDM('${escapeHtml(ct.peer_id)}')"><div class="${ct.status==='Online'?'ern-online-dot':'ern-offline-dot'}"></div><div style="flex:1;min-width:0"><div class="ern-contact-name">${escapeHtml(ct.display_name)}</div><div class="ern-contact-status">${ct.status==='Online'?'Online':ct.last_seen?'Last seen '+new Date(ct.last_seen*1000).toLocaleDateString():'Offline'}</div></div>${ct.blocked?'<span class="ern-badge" style="background:var(--error)">Blocked</span>':''}</div>`).join('');
+            const reqs = inbound.length===0?'':`<div class="ern-section-title" style="margin-top:16px">📩 Pending Requests <span class="ern-badge">${inbound.length}</span></div>`+inbound.map(r=>`<div class="ern-request-card"><div style="flex:1"><div class="ern-contact-name">${escapeHtml(r.display_name)}</div><div class="ern-contact-status">${escapeHtml(r.from.substring(0,16))}…</div></div><div class="ern-request-actions"><button class="ern-btn ern-btn-primary" style="padding:4px 12px;font-size:11px" onclick="ErnOS.meshContactAccept('${escapeHtml(r.from)}')">Accept</button><button class="ern-btn ern-btn-ghost" style="padding:4px 12px;font-size:11px" onclick="ErnOS.meshContactBlock('${escapeHtml(r.from)}')">Block</button></div></div>`).join('');
+            content = `<button class="ern-btn ern-btn-primary" onclick="ErnOS.meshContactAdd()" style="margin-bottom:12px">+ Add Contact</button>${cards}${reqs}`;
+        } else {
+            const resp = await fetch('/api/mesh/groups'); const data = await resp.json();
+            const groups = data.groups || [];
+            const cards = groups.length===0?'<div class="ern-empty"><div class="ern-empty-icon">👥</div><div class="ern-empty-title">No groups yet</div><div class="ern-empty-sub">Create a group to start messaging with multiple peers</div></div>':
+                groups.map(g=>`<div class="ern-group-card" onclick="ErnOS.meshGroupOpen('${escapeHtml(g.id)}')"><div class="ern-group-emoji">${g.emoji||'👥'}</div><div class="ern-group-info"><div class="ern-group-name">${escapeHtml(g.name)}</div><div class="ern-group-meta">${g.member_count} member${g.member_count!==1?'s':''} · Created ${new Date(g.created_at*1000).toLocaleDateString()}</div></div></div>`).join('');
+            content = `<button class="ern-btn ern-btn-primary" onclick="ErnOS.meshGroupCreate()" style="margin-bottom:12px">+ New Group</button>${data.pending_invites>0?'<div class="ern-badge" style="margin-bottom:12px;background:rgba(0,255,136,0.15)">'+data.pending_invites+' pending invite(s)</div>':''}${cards}`;
+        }
+        c.innerHTML = `<div class="ern-section-header"><div class="ern-section-title">👤 People</div></div>
+        <div class="ern-people-toggle">
+            <button class="ern-people-toggle-btn ${isContacts?'active':''}" onclick="ErnOS.switchPeople('contacts')">Contacts</button>
+            <button class="ern-people-toggle-btn ${!isContacts?'active':''}" onclick="ErnOS.switchPeople('groups')">Groups</button>
+        </div>${content}`;
+    }
+
+    async function switchPeople(view) {
+        const c = document.getElementById('mesh-tab-content');
+        await renderPeople(c, view);
+    }
+
+    // ─── Sites tab (unchanged) ───
+    async function renderSitesTab(c) {
+        const sr = await fetch('/api/mesh/sites'); const sd = await sr.json();
+        const sites = sd.sites || [];
+        c.innerHTML = `<div class="ern-section-header"><div class="ern-section-title">🌐 ErnSites <span class="ern-badge">${sites.length} hosted</span></div><button class="ern-btn ern-btn-primary" onclick="ErnOS.meshSitePublish && ErnOS.meshSitePublish()">📤 Publish Site</button></div>
+        ${sites.length===0?'<div class="ern-empty"><div class="ern-empty-icon">🌐</div><div class="ern-empty-title">No sites hosted</div><div class="ern-empty-sub">Publish a website to host it on the decentralised mesh network</div></div>':
+        `<div class="ern-site-cards">${sites.map(s=>`<div class="ern-site-card"><div class="ern-site-card-header"><div class="ern-site-card-icon">🌐</div><div class="ern-site-card-name">${escapeHtml(s.name)}</div></div><div class="ern-site-card-desc">${escapeHtml(s.description||'No description')}</div><div class="ern-site-card-meta"><span class="ern-badge">v${s.version}</span><span class="ern-badge">${s.file_count} files</span></div><div class="ern-site-card-actions"><button class="ern-btn ern-btn-ghost ern-btn-sm" onclick="window.open('/api/mesh/sites/browse/${encodeURIComponent(s.name)}/index.html','_blank')">🔗 Browse</button><button class="ern-btn ern-btn-danger ern-btn-sm" onclick="ErnOS.meshSiteRemove('${escapeHtml(s.name)}')">🗑 Remove</button></div></div>`).join('')}</div>`}`;
+    }
+
+
 
     // ─── Mesh service action helpers ───
     window._meshCurrentTopic = '';
@@ -1835,7 +1741,7 @@ const ErnOS = (() => {
         if (!name) return;
         await fetch('/api/mesh/chat/send', { method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ topic: name, content: 'Topic created', display_name: null }) });
-        loadMeshTab('chat', null);
+        loadSocialMode('chat');
     }
     async function meshChatLoad(topic) {
         window._meshCurrentTopic = topic;
@@ -1872,7 +1778,7 @@ const ErnOS = (() => {
         const c = document.getElementById('mesh-tab-content');
         c.innerHTML = `<div class="ern-section-header">
             <div class="ern-section-title">📝 Compose Message</div>
-            <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadMeshTab('mail',null)">← Back</button>
+            <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadSocialMode('mail')">← Back</button>
         </div>
         <div class="ern-mail-compose">
             <input id="mesh-mail-to" class="ern-input" placeholder="Recipient Peer ID">
@@ -1880,7 +1786,7 @@ const ErnOS = (() => {
             <textarea id="mesh-mail-body" class="ern-textarea" rows="6" placeholder="Write your message..."></textarea>
             <div class="ern-action-bar">
                 <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshMailSendCompose()">📤 Send</button>
-                <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadMeshTab('mail',null)">Cancel</button>
+                <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadSocialMode('mail')">Cancel</button>
             </div>
         </div>`;
     }
@@ -1891,14 +1797,14 @@ const ErnOS = (() => {
         if (!to || !subj || !body) { showToast('All fields are required', 'error'); return; }
         await fetch('/api/mesh/mail/send', { method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ to, subject: subj, body }) });
-        showToast('Mail sent', 'success'); loadMeshTab('mail', null);
+        showToast('Mail sent', 'success'); loadSocialMode('mail');
     }
     async function meshMailRead(id) {
         const r = await fetch(`/api/mesh/mail/message/${encodeURIComponent(id)}`);
         const m = await r.json();
         document.getElementById('mesh-tab-content').innerHTML = `<div class="ern-section-header">
             <div class="ern-section-title">✉️ ${escapeHtml(m.subject)}</div>
-            <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadMeshTab('mail',null)">← Back</button>
+            <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadSocialMode('mail')">← Back</button>
         </div>
         <div class="ern-mail-preview">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
@@ -1911,14 +1817,14 @@ const ErnOS = (() => {
     }
     async function meshMailDelete(id) {
         await fetch(`/api/mesh/mail/message/${encodeURIComponent(id)}`, { method:'DELETE' });
-        showToast('Message deleted', 'success'); loadMeshTab('mail', null);
+        showToast('Message deleted', 'success'); loadSocialMode('mail');
     }
     async function meshMailSent() {
         const r = await fetch('/api/mesh/mail/sent'); const d = await r.json();
         const msgs = d.messages || []; const c2 = document.getElementById('mesh-tab-content');
         c2.innerHTML = `<div class="ern-section-header">
             <div class="ern-section-title">✉️ Sent Mail <span class="ern-badge">${msgs.length}</span></div>
-            <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadMeshTab('mail',null)">← Inbox</button>
+            <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadSocialMode('mail')">← Inbox</button>
         </div>
         ${msgs.length === 0 ? '<div class="ern-empty"><div class="ern-empty-icon">📤</div><div class="ern-empty-title">No sent messages</div></div>' :
         `<table class="ern-table"><thead><tr><th>To</th><th>Subject</th><th>Date</th></tr></thead>
@@ -1932,18 +1838,18 @@ const ErnOS = (() => {
         const name = prompt('Room name:'); if (!name) return;
         await fetch('/api/mesh/voice/create', { method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ name, max_participants: 10 }) });
-        showToast('Room created', 'success'); loadMeshTab('voice', null);
+        showToast('Room created', 'success'); loadSocialMode('voice');
     }
     async function meshVoiceJoin(id) {
         await fetch(`/api/mesh/voice/join/${encodeURIComponent(id)}`, { method:'POST' });
-        showToast('Joined room', 'success'); loadMeshTab('voice', null);
+        showToast('Joined room', 'success'); loadSocialMode('voice');
     }
     async function meshForumCreate() {
         const name = prompt('Community name:'); if (!name) return;
         const desc = prompt('Description:') || '';
         await fetch('/api/mesh/forum/communities', { method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ name, description: desc }) });
-        showToast('Community created', 'success'); loadMeshTab('forum', null);
+        showToast('Community created', 'success'); loadSocialMode('forum');
     }
     async function meshForumThreads(community) {
         const r = await fetch(`/api/mesh/forum/threads/${encodeURIComponent(community)}`);
@@ -1952,7 +1858,7 @@ const ErnOS = (() => {
         c2.innerHTML = `<div class="ern-section-header">
             <div class="ern-section-title">📋 ${escapeHtml(community)} <span class="ern-badge">${threads.length} threads</span></div>
             <div class="ern-action-bar">
-                <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadMeshTab('forum',null)">← Back</button>
+                <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadSocialMode('forum')">← Back</button>
                 <button class="ern-btn ern-btn-primary" onclick="ErnOS.meshForumNewThread('${escapeHtml(community)}')">+ New Thread</button>
             </div>
         </div>
@@ -1984,12 +1890,12 @@ const ErnOS = (() => {
         await fetch('/api/mesh/feed', { method:'POST', headers:{'Content-Type':'application/json'},
             body: JSON.stringify({ content: input.value, tags, display_name: null }) });
         input.value = ''; document.getElementById('mesh-feed-tags').value = '';
-        showToast('Posted!', 'success'); loadMeshTab('feed', null);
+        showToast('Posted!', 'success'); loadSocialMode('feed');
     }
     async function meshTrust(peerId, delta) {
         await fetch(`/api/mesh/reputation/trust/${encodeURIComponent(peerId)}`, { method:'POST',
             headers:{'Content-Type':'application/json'}, body: JSON.stringify({ delta }) });
-        showToast(`Reputation ${delta>0?'increased':'decreased'}`, 'success'); loadMeshTab('reputation', null);
+        showToast(`Reputation ${delta>0?'increased':'decreased'}`, 'success'); loadMeshTab('dashboard', null);
     }
     async function meshSiteRemove(name) {
         if (!confirm(`Remove site "${name}"?`)) return;
@@ -2008,20 +1914,20 @@ const ErnOS = (() => {
         const d = await r.json();
         if (d.ok) { showToast('Contact request sent', 'success'); }
         else { showToast(d.error || 'Failed', 'error'); }
-        loadMeshTab('contacts', null);
+        loadMeshTab('people', null);
     }
     async function meshContactAccept(peerId) {
         await fetch(`/api/mesh/contacts/accept/${encodeURIComponent(peerId)}`, { method:'POST' });
-        showToast('Contact accepted', 'success'); loadMeshTab('contacts', null);
+        showToast('Contact accepted', 'success'); loadMeshTab('people', null);
     }
     async function meshContactBlock(peerId) {
         if (!confirm('Block this peer?')) return;
         await fetch(`/api/mesh/contacts/block/${encodeURIComponent(peerId)}`, { method:'POST' });
-        showToast('Peer blocked', 'success'); loadMeshTab('contacts', null);
+        showToast('Peer blocked', 'success'); loadMeshTab('people', null);
     }
     async function meshContactDM(peerId) {
         showToast('Opening DM with ' + peerId.substring(0,12) + '…', 'info');
-        loadMeshTab('chat', null);
+        loadSocialMode('chat');
     }
     async function meshGroupCreate() {
         const name = prompt('Group name:');
@@ -2033,7 +1939,7 @@ const ErnOS = (() => {
         const d = await r.json();
         if (d.ok) { showToast(`Group "${d.name}" created`, 'success'); }
         else { showToast(d.error || 'Failed', 'error'); }
-        loadMeshTab('groups', null);
+        loadMeshTab('people', null);
     }
     async function meshGroupOpen(groupId) {
         const r = await fetch(`/api/mesh/groups/${encodeURIComponent(groupId)}/messages`);
@@ -2042,7 +1948,7 @@ const ErnOS = (() => {
         c.innerHTML = `<div class="ern-section-header">
             <div class="ern-section-title">💬 Group Chat <span class="ern-badge">${msgs.length} messages</span></div>
             <div class="ern-action-bar">
-                <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadMeshTab('groups',null)">← Back</button>
+                <button class="ern-btn ern-btn-ghost" onclick="ErnOS.loadMeshTab('people', null)">← Back</button>
             </div>
         </div>
         <div class="ern-chat-messages" id="mesh-group-messages" style="flex:1;overflow-y:auto;margin-bottom:12px">
@@ -4622,6 +4528,7 @@ const ErnOS = (() => {
         meshFeedPost, meshTrust, meshSiteRemove,
         meshContactAdd, meshContactAccept, meshContactBlock, meshContactDM,
         meshGroupCreate, meshGroupOpen, meshGroupSend,
+        loadSocialMode, switchPeople,
     };
 })();
 
