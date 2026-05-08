@@ -11,3 +11,4 @@ android/app/src/main/jniLibs/
 ern-os.toml
 android/.llama-cpp-src/
 ern-os.toml
+.env

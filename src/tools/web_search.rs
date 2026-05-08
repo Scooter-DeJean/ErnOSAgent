@@ -115,34 +115,82 @@ pub async fn visit(url: &str) -> Result<String> {
 // ── Environment Key Resolution ──
 
 fn resolve_env_key(primary: &str, aliases: &[&str]) -> String {
+    // 1. Check real environment variables first
     if let Ok(key) = std::env::var(primary) { if !key.is_empty() { return key; } }
     for alias in aliases {
         if let Ok(key) = std::env::var(alias) { if !key.is_empty() { return key; } }
     }
-    for env_path in &[".env", "../.env"] {
+
+    // 2. Check .env files in multiple locations:
+    //    - CWD (standard)
+    //    - parent of CWD (for when run from a subdirectory)
+    //    - next to the executable (for deployed installs)
+    let mut search_paths: Vec<std::path::PathBuf> = vec![
+        std::path::PathBuf::from(".env"),
+        std::path::PathBuf::from("../.env"),
+    ];
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            search_paths.push(exe_dir.join(".env"));
+        }
+    }
+
+    for env_path in &search_paths {
         if let Ok(content) = std::fs::read_to_string(env_path) {
+            let check_keys: Vec<&str> = std::iter::once(primary)
+                .chain(aliases.iter().copied())
+                .collect();
             for line in content.lines() {
-                let check_keys: Vec<&str> = std::iter::once(primary).chain(aliases.iter().copied()).collect();
+                // Skip comments and empty lines
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') { continue; }
                 for key_name in &check_keys {
                     let prefix = format!("{}=", key_name);
-                    if line.starts_with(&prefix) {
-                        let parts: Vec<&str> = line.splitn(2, '=').collect();
+                    if trimmed.starts_with(&prefix) {
+                        let parts: Vec<&str> = trimmed.splitn(2, '=').collect();
                         if parts.len() == 2 {
                             let key = parts[1].trim_matches('"').trim_matches('\'').to_string();
-                            if !key.is_empty() { return key; }
+                            if !key.is_empty() {
+                                tracing::debug!(
+                                    key_name, path = %env_path.display(),
+                                    "web_search: resolved API key from .env"
+                                );
+                                return key;
+                            }
                         }
                     }
                 }
             }
         }
     }
+
+    tracing::debug!(
+        primary,
+        "web_search: API key not found in env or any .env file"
+    );
     String::new()
 }
 
 fn build_client() -> Result<reqwest::Client> {
+    use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE};
+    let mut headers = HeaderMap::new();
+    headers.insert(ACCEPT, HeaderValue::from_static(
+        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    ));
+    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-GB,en;q=0.9"));
+    headers.insert(
+        reqwest::header::ACCEPT_ENCODING,
+        HeaderValue::from_static("gzip, deflate, br"),
+    );
+
     Ok(reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(15))
-        .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36")
+        .timeout(std::time::Duration::from_secs(30))
+        .user_agent(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+             AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
+        .default_headers(headers)
+        .redirect(reqwest::redirect::Policy::limited(10))
         .build()?)
 }
 
