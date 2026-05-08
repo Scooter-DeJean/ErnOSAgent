@@ -230,7 +230,7 @@ async fn run_streaming_pipeline(
                     let retry_result = stream_consumer::consume_stream(retry_rx, &mut retry_sink).await;
                     if let ConsumeResult::Reply { ref text, .. } = retry_result {
                         if !text.trim().is_empty() {
-                            emit_reply(&state, provider, &mut messages, &tools, &msg, &session_id, text, &tx).await;
+                            emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, &tx).await;
                             let _ = emit(&tx, "done", &serde_json::json!({})).await;
                             return;
                         }
@@ -258,17 +258,17 @@ async fn run_streaming_pipeline(
                     })).await;
                 }
             } else {
-                emit_reply(&state, provider, &mut messages, &tools, &msg, &session_id, text, &tx).await;
+                emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, &tx).await;
             }
         }
         ConsumeResult::PlanProposal { title, plan_markdown, estimated_turns } => {
             emit_plan(&state.config.general.data_dir, &session_id, &title, &plan_markdown, estimated_turns, &tx).await;
         }
         ConsumeResult::ToolCall { id, name, arguments } => {
-            emit_tool_chain(&state, provider, &mut messages, &tools, &msg, &session_id, id, name, arguments, &tx).await;
+            emit_tool_chain(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, id, name, arguments, &tx).await;
         }
         ConsumeResult::Escalate { objective, plan, .. } => {
-            emit_escalation(&state, provider, messages, &msg, &session_id, &objective, plan, &tx).await;
+            emit_escalation(&state, provider, messages, &content_with_attachments, &session_id, &objective, plan, &tx).await;
         }
         ConsumeResult::Error(ref e) if e.contains("Stream stalled") => {
             // Stream stalled during thinking — retry with thinking disabled
@@ -288,7 +288,7 @@ async fn run_streaming_pipeline(
             let retry_result = stream_consumer::consume_stream(retry_rx, &mut retry_sink).await;
             if let ConsumeResult::Reply { ref text, .. } = retry_result {
                 if !text.trim().is_empty() {
-                    emit_reply(&state, provider, &mut messages, &tools, &msg, &session_id, text, &tx).await;
+                    emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, &tx).await;
                     let _ = emit(&tx, "done", &serde_json::json!({})).await;
                     return;
                 }
@@ -317,11 +317,11 @@ async fn emit(tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>, event: 
 async fn emit_reply(
     state: &AppState, provider: &dyn crate::provider::Provider,
     messages: &mut Vec<crate::provider::Message>, tools: &serde_json::Value,
-    msg: &crate::platform::adapter::PlatformMessage, session_id: &str,
+    user_query: &str, session_id: &str,
     text: &str, tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
     let (audited, audit) = super::platform_ingest::audit_and_capture(
-        state, provider, messages, tools, &msg.content, text, session_id,
+        state, provider, messages, tools, user_query, text, session_id,
     ).await;
     let _ = emit(tx, "audit", &serde_json::json!({
         "verdict": audit.verdict, "confidence": audit.confidence,
@@ -363,7 +363,7 @@ async fn emit_plan(
 async fn emit_tool_chain(
     state: &AppState, provider: &dyn crate::provider::Provider,
     messages: &mut Vec<crate::provider::Message>, tools: &serde_json::Value,
-    msg: &crate::platform::adapter::PlatformMessage, session_id: &str,
+    user_query: &str, session_id: &str,
     id: String, name: String, arguments: String,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
@@ -372,7 +372,7 @@ async fn emit_tool_chain(
 
     // Use the proper tool chain that loops until the model produces a reply
     let (reply, _events, audit) = super::platform_exec::run_platform_tool_chain(
-        state, provider, messages, tools, &msg.content, session_id, tc, Some(tx),
+        state, provider, messages, tools, user_query, session_id, tc, Some(tx),
     ).await;
     // Tool events already emitted live via sse_tx during the loop
 
@@ -399,13 +399,13 @@ async fn emit_tool_chain(
 async fn emit_escalation(
     state: &AppState, provider: &dyn crate::provider::Provider,
     messages: Vec<crate::provider::Message>,
-    msg: &crate::platform::adapter::PlatformMessage, session_id: &str,
+    user_query: &str, session_id: &str,
     objective: &str, plan: Option<String>,
     tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
     let _ = emit(tx, "escalate", &serde_json::json!({"objective": objective})).await;
     let (reply, _events, _audit) = super::platform_exec::run_platform_react(
-        state, provider, messages, objective, plan.as_deref(), &msg.content, session_id, Some(tx),
+        state, provider, messages, objective, plan.as_deref(), user_query, session_id, Some(tx),
     ).await;
     // Tool events already emitted live via sse_tx during the loop
     // Persist escalation reply first for accurate message_count

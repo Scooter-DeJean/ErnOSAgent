@@ -124,7 +124,7 @@ pub async fn platform_ingest(
     };
 
     let (response, thinking_content, tool_events, audit_summary, has_plan, plan_markdown) = dispatch_result(
-        &state, provider, &mut messages, &tools, &msg, &session_id, result,
+        &state, provider, &mut messages, &tools, &msg, &content_with_attachments, &session_id, result,
     ).await;
 
     // Read session message count after dispatch (dispatch persists the assistant turn)
@@ -165,6 +165,7 @@ async fn dispatch_result(
     messages: &mut Vec<crate::provider::Message>,
     tools: &serde_json::Value,
     msg: &crate::platform::adapter::PlatformMessage,
+    user_query: &str,
     session_id: &str,
     result: crate::inference::stream_consumer::ConsumeResult,
 ) -> (String, Option<String>, Vec<ToolEvent>, Option<AuditSummary>, bool, Option<String>) {
@@ -172,15 +173,15 @@ async fn dispatch_result(
     match result {
         ConsumeResult::Reply { text, thinking } => {
             let (audited, audit) = audit_and_capture(
-                state, provider, messages, tools, &msg.content, &text, session_id,
+                state, provider, messages, tools, user_query, &text, session_id,
             ).await;
             crate::web::ws_learning::ingest_assistant_turn(state, &audited, session_id).await;
-            crate::web::ws_learning::spawn_insight_extraction(state, &msg.content, &audited);
+            crate::web::ws_learning::spawn_insight_extraction(state, user_query, &audited);
             (audited, thinking, Vec::new(), Some(audit), false, None)
         }
         ConsumeResult::Escalate { objective, plan, .. } => {
             let (reply, thinking, events, audit) = handle_escalation(
-                state, provider, messages.clone(), msg, &objective, plan.as_deref(), session_id,
+                state, provider, messages.clone(), msg, user_query, &objective, plan.as_deref(), session_id,
             ).await;
             (reply, thinking, events, audit, plan.is_some(), None)
         }
@@ -191,7 +192,7 @@ async fn dispatch_result(
             }
             let tc = crate::tools::schema::ToolCall { id, name, arguments };
             let (reply, events, audit) = super::platform_exec::run_platform_tool_chain(
-                state, provider, messages, tools, &msg.content, session_id, tc, None,
+                state, provider, messages, tools, user_query, session_id, tc, None,
             ).await;
             crate::web::ws_learning::ingest_assistant_turn(state, &reply, session_id).await;
             (reply, None, events, audit, false, None)
@@ -214,7 +215,7 @@ async fn dispatch_result(
             }
             // Run tool chain starting from the last tool call
             let (reply, events, audit) = super::platform_exec::run_platform_tool_chain(
-                state, provider, messages, tools, &msg.content, session_id, last_tc, None,
+                state, provider, messages, tools, user_query, session_id, last_tc, None,
             ).await;
             all_events.extend(events);
             crate::web::ws_learning::ingest_assistant_turn(state, &reply, session_id).await;
@@ -262,6 +263,7 @@ async fn handle_escalation(
     provider: &dyn crate::provider::Provider,
     messages: Vec<crate::provider::Message>,
     msg: &crate::platform::adapter::PlatformMessage,
+    user_query: &str,
     objective: &str,
     plan: Option<&str>,
     session_id: &str,
@@ -271,7 +273,7 @@ async fn handle_escalation(
                 None, Vec::new(), None);
     }
     let (reply, events, audit) = super::platform_exec::run_platform_react(
-        state, provider, messages, objective, plan, &msg.content, session_id, None,
+        state, provider, messages, objective, plan, user_query, session_id, None,
     ).await;
     crate::web::ws_learning::ingest_assistant_turn(state, &reply, session_id).await;
     (reply, None, events, audit)
