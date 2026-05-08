@@ -66,6 +66,8 @@ pub async fn platform_ingest(
     let mut deep_read_digests: Vec<(String, String)> = Vec::new();
     if msg.is_admin {
         for att in &processed {
+            // Skip images — they're already handled as multimodal data URLs, not text.
+            if att.image_data_url.is_some() { continue; }
             if let (Some(ref path), true) = (&att.saved_path, att.exceeds_budget(state.model_spec.context_length)) {
                 let config = crate::web::attachment_reader::DeepReadConfig {
                     path: path.clone(),
