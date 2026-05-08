@@ -1,0 +1,74 @@
+name: ✨ Feature Request
+description: Suggest a new feature for Ern-OS
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for suggesting a feature. Please describe it clearly.
+        Before submitting, read the [governance framework](../../agents%20and%20controbutions/rust_code_governance.md) to ensure your request aligns with project principles.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: What problem does this feature solve? Why is it needed?
+      placeholder: "I frequently need to X, but currently the system only supports Y."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: How do you envision this feature working?
+      placeholder: "Add a Z capability that allows users to..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider? Why is the proposed solution better?
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which part of the system would this feature affect?
+      options:
+        - Inference / Streaming
+        - WebUI / Frontend
+        - Tool System
+        - Memory System
+        - Observer / Audit
+        - Platform Adapters
+        - Provider Layer
+        - Configuration
+        - CLI / Developer Experience
+        - Other
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: governance
+    attributes:
+      label: Governance Alignment
+      description: Confirm your feature request aligns with project principles.
+      options:
+        - label: This feature does not require hardcoded model parameters (§2.1)
+          required: true
+        - label: This feature maintains model/provider neutrality (§7)
+          required: true
+        - label: This feature does not introduce silent fallbacks (§2.4)
+          required: true
+        - label: I have searched existing issues for duplicates
+          required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Any other context, screenshots, or examples.

@@ -50,5 +50,86 @@ jobs:
       - name: Run tests
         run: cargo test --release
 
-      - name: Check for warnings
-        run: cargo build --release 2>&1 | grep -c "warning" || echo "0 warnings"
+      - name: Enforce zero warnings
+        run: |
+          WARNINGS=$(cargo build --release 2>&1 | grep -c "warning:" || true)
+          if [ "$WARNINGS" -gt 0 ]; then
+            echo "::error::Build produced $WARNINGS warning(s). Zero warnings required."
+            cargo build --release 2>&1 | grep "warning:"
+            exit 1
+          fi
+          echo "✅ Zero warnings"
+
+  governance-checks:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "§1.1 — Check file size (≤500 lines excluding tests)"
+        run: |
+          VIOLATIONS=0
+          while IFS= read -r file; do
+            TOTAL=$(wc -l < "$file")
+            TEST_START=$(grep -n '#\[cfg(test)\]' "$file" | head -1 | cut -d: -f1 || echo "")
+            if [ -n "$TEST_START" ]; then
+              NON_TEST=$((TEST_START - 1))
+            else
+              NON_TEST=$TOTAL
+            fi
+            if [ "$NON_TEST" -gt 500 ]; then
+              echo "::error file=$file::$file has $NON_TEST non-test lines (limit: 500)"
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+          done < <(find src -name '*.rs' -not -path '*/tests/*')
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            echo "::error::$VIOLATIONS file(s) exceed the 500-line limit (§1.1)"
+            exit 1
+          fi
+          echo "✅ All files under 500 non-test lines"
+
+      - name: "R2 — No todo!() or unimplemented!()"
+        run: |
+          if grep -rn 'todo!()' src/ --include='*.rs' | grep -v '#\[cfg(test)\]' | grep -v 'mod tests'; then
+            echo "::error::Found todo!() in production code (R2)"
+            exit 1
+          fi
+          if grep -rn 'unimplemented!()' src/ --include='*.rs' | grep -v '#\[cfg(test)\]' | grep -v 'mod tests'; then
+            echo "::error::Found unimplemented!() in production code (R2)"
+            exit 1
+          fi
+          echo "✅ No todo!() or unimplemented!()"
+
+      - name: "R10 — New modules have doc comments"
+        run: |
+          VIOLATIONS=0
+          for file in $(git diff --name-only --diff-filter=A origin/main -- 'src/**/*.rs'); do
+            if ! head -5 "$file" | grep -q '//!'; then
+              echo "::error file=$file::New module $file is missing a //! doc comment (R10)"
+              VIOLATIONS=$((VIOLATIONS + 1))
+            fi
+          done
+          if [ "$VIOLATIONS" -gt 0 ]; then
+            exit 1
+          fi
+          echo "✅ All new modules have doc comments"
+
+      - name: "R16 — No secrets in source code"
+        run: |
+          # Check for common secret patterns in changed files
+          PATTERNS='(api_key|api_secret|password|token|credential)\s*=\s*"[^"]{8,}'
+          if git diff origin/main -- 'src/**/*.rs' '*.toml' '*.json' | grep -iP "$PATTERNS" | grep -v 'example\|placeholder\|YOUR_\|test_\|dummy'; then
+            echo "::error::Possible secret detected in source code (R16)"
+            exit 1
+          fi
+          echo "✅ No secrets detected"
+
+      - name: "§2.3 — No empty function bodies"
+        run: |
+          # Detect functions with only a comment or empty body
+          if grep -Pzn 'fn \w+\([^)]*\)[^{]*\{\s*\}' src/**/*.rs 2>/dev/null; then
+            echo "::error::Found empty function body (§2.3)"
+            exit 1
+          fi
+          echo "✅ No empty function bodies"

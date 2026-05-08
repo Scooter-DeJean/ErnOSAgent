@@ -1,0 +1,105 @@
+name: 🐛 Bug Report
+description: Report a bug in Ern-OS
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting a bug. Please fill in all sections below.
+        Before submitting, check if this bug has already been reported.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear, concise description of the bug.
+      placeholder: "When I do X, Y happens instead of Z."
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: Exact steps to reproduce the behaviour.
+      placeholder: |
+        1. Start Ern-OS with `cargo run --release`
+        2. Open WebUI at http://localhost:3000
+        3. Send message "..."
+        4. Observe error in terminal / WebUI
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behaviour
+      description: What should happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behaviour
+      description: What actually happens. Include error messages, log output, or screenshots.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Log Output
+      description: Paste relevant log output from the terminal. Wrap in a code block.
+      render: shell
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected Component
+      description: Which part of the system is affected?
+      options:
+        - Inference / Streaming
+        - WebUI / Frontend
+        - WebSocket
+        - Tool Execution
+        - Memory System
+        - Observer / Audit
+        - Discord Adapter
+        - Telegram Adapter
+        - Provider (llamacpp)
+        - Provider (Ollama)
+        - Provider (OpenAI-compatible)
+        - Configuration
+        - Build / CI
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Your system details
+      placeholder: |
+        - OS: macOS 15.4 / Ubuntu 24.04 / Windows 11
+        - Hardware: Apple M3 Ultra / NVIDIA RTX 4090 / CPU-only
+        - Rust version: (output of `rustc --version`)
+        - Ern-OS version/commit: (output of `git rev-parse --short HEAD`)
+        - LLM server: llama-server / Ollama / LM Studio
+        - Model: Gemma 4 27B / Qwen3 32B / etc.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-Submission Checks
+      options:
+        - label: I have searched existing issues for duplicates
+          required: true
+        - label: I can reproduce this bug consistently
+          required: false
+        - label: I have included relevant log output
+          required: false

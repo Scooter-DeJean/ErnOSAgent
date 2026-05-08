@@ -19,6 +19,8 @@ use super::stream_parser_util::{
     check_server_stall, safe_emit_length, accumulate_tool_call,
     emit_accumulated_tools,
 };
+#[cfg(test)]
+use super::stream_parser_util::SseFunctionDelta;
 
 /// OpenAI SSE delta chunk structure.
 #[derive(Debug, Deserialize)]
