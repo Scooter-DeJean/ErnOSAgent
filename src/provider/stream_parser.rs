@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 use super::stream_parser_util::{
     ToolCallAccumulator, SseToolCallDelta,
     check_server_stall, safe_emit_length, accumulate_tool_call,
-    emit_accumulated_tools,
+    emit_accumulated_tools, erase_slot_cache,
 };
 #[cfg(test)]
 use super::stream_parser_util::SseFunctionDelta;
@@ -90,13 +90,19 @@ pub async fn parse_sse_stream(
             }
             _ = stall_interval.tick() => {
                 if let Some(ref url) = slots_url {
-                    if let Some(stall) = check_server_stall(url, chunk_count, &last_chunk_time).await {
+                    // Slot 0 = main inference (chat() always targets slot 0)
+                    if let Some(stall) = check_server_stall(url, chunk_count, &last_chunk_time, 0).await {
                         tracing::warn!(
                             server_decoded = stall.n_decoded,
+                            server_predicted = stall.n_predicted,
                             client_chunks = chunk_count,
                             secs_since_last_chunk = last_chunk_time.elapsed().as_secs(),
-                            "SSE stream: stall detected — server decoding but client not receiving"
+                            "SSE stream: generation stall detected (n_predicted confirms server IS generating)"
                         );
+                        // Erase the slot's KV cache before returning — prevents cache poisoning
+                        // that causes all subsequent requests to get empty responses.
+                        let base_url = url.trim_end_matches("/slots");
+                        erase_slot_cache(base_url, 0).await;
                         let _ = tx.send(StreamEvent::Error(
                             "Stream stalled: server generating tokens but HTTP stream not flushing".into()
                         )).await;

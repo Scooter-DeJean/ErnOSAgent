@@ -16,49 +16,115 @@ pub(super) struct ToolCallAccumulator {
 /// Server stall detection info.
 pub(super) struct StallInfo {
     pub(super) n_decoded: u64,
+    pub(super) n_predicted: u64,
 }
 
 /// Check if llama-server is generating tokens that aren't reaching the HTTP stream.
 ///
 /// Queries the server's `/slots` endpoint (model-derived data per §2.1) to read
-/// `n_decoded` — the server's real decoded token count. A stall is detected when:
-/// - The server is actively processing (`is_processing == true`)
-/// - The server has decoded significantly more tokens than the client received
+/// generation progress. A stall is detected when:
+/// - The server is actively processing on the target slot (`is_processing == true`)
+/// - The server has **generated** (n_predicted) tokens that the client hasn't received
 /// - No HTTP chunks have arrived in the recent interval
 ///
-/// HEURISTIC: The `n_decoded > 500 && client_chunks < 10` thresholds are derived
-/// from observed minimum generation speed (~13 tok/s on M3 Ultra). At 10-second
-/// intervals, the server generates ≥130 tokens. 500 provides ~4x margin against
-/// prompt-processing spikes. The `<10 chunks` guard prevents false-positives
-/// during normal streaming. Error margin: could false-positive during initial
-/// KV cache fill on very large prompts (>200K tokens), mitigated by the
-/// `is_processing` check and the `last_chunk_time` age requirement.
+/// CRITICAL: Uses `n_predicted` (generated content tokens), NOT `n_decoded` (which
+/// includes prompt prefill tokens). The old `n_decoded` heuristic caused false
+/// positives during large prompt prefill (~49K tokens at ~5K tok/s = ~10s), which
+/// then poisoned the KV cache and broke all subsequent inferences on the slot.
 pub(super) async fn check_server_stall(
     slots_url: &str,
     client_chunks: u64,
     last_chunk_time: &Instant,
+    target_slot_id: i32,
 ) -> Option<StallInfo> {
-    // Only check if we haven't received data for at least 8 seconds
-    if last_chunk_time.elapsed() < Duration::from_secs(8) {
+    // Minimum 30s before declaring a stall — large prompts (49K+ tokens) take
+    // 10-20s to prefill. No content tokens arrive during prefill, which is normal.
+    if last_chunk_time.elapsed() < Duration::from_secs(30) {
         return None;
     }
 
     let resp = reqwest::get(slots_url).await.ok()?;
     let slots: Vec<serde_json::Value> = resp.json().await.ok()?;
-    let slot = slots.first()?;
+
+    // Find the specific slot we're streaming from — never assume slot ordering.
+    let slot = slots.iter().find(|s| {
+        s["id"].as_i64().unwrap_or(-1) == target_slot_id as i64
+    })?;
 
     if !slot["is_processing"].as_bool().unwrap_or(false) {
-        return None; // Server isn't processing — not a stall
+        return None; // Server isn't processing on this slot — not a stall
     }
 
-    let n_decoded = slot["next_token"][0]["n_decoded"].as_u64().unwrap_or(0);
+    let n_decoded = slot["n_decoded"].as_u64()
+        .or_else(|| slot["next_token"].get(0).and_then(|t| t["n_decoded"].as_u64()))
+        .unwrap_or(0);
 
-    // HEURISTIC: see doc comment above for derivation and error margin.
-    if n_decoded > 500 && client_chunks < 10 {
-        return Some(StallInfo { n_decoded });
+    // n_predicted = tokens the server has GENERATED (content/thinking output).
+    // This excludes prompt prefill tokens, so it only counts real output.
+    let n_predicted = slot["n_predicted"].as_u64().unwrap_or(0);
+
+    // A real stall: the server has generated >50 content tokens but the client
+    // received almost none. During normal prefill, n_predicted stays at 0.
+    if n_predicted > 50 && client_chunks < 10 {
+        tracing::debug!(
+            target_slot_id, n_decoded, n_predicted, client_chunks,
+            "Stall check: generation stall confirmed (n_predicted > threshold)"
+        );
+        return Some(StallInfo { n_decoded, n_predicted });
+    }
+
+    // Fallback: if n_predicted is not available (older llama-server builds),
+    // use n_decoded but with a much higher threshold that can't fire during
+    // normal prefill. At ~5K tok/s prefill and 30s minimum elapsed, the server
+    // has processed ~150K prompt tokens. We only flag if n_decoded exceeds what
+    // could be prompt prefill (context_length is typically 262K, so use 200K).
+    if n_predicted == 0 && n_decoded > 200_000 && client_chunks < 10 {
+        tracing::warn!(
+            target_slot_id, n_decoded, client_chunks,
+            "Stall check: fallback n_decoded heuristic triggered (n_predicted unavailable)"
+        );
+        return Some(StallInfo { n_decoded, n_predicted: 0 });
     }
 
     None
+}
+
+/// Erase a slot's KV cache after a stall abort to prevent cache poisoning.
+///
+/// When a streaming inference is interrupted mid-generation, the slot retains
+/// partial KV cache entries. If the next request's prompt prefix matches these
+/// stale entries, the server loads corrupted hidden states and the model
+/// immediately stops with zero output (finish_reason="stop", no content).
+///
+/// Calling this after a stall ensures the next inference starts with a clean cache.
+pub async fn erase_slot_cache(base_url: &str, slot_id: i32) {
+    let url = format!("{}/slots/{}?action=erase", base_url, slot_id);
+    match reqwest::Client::new()
+        .post(&url)
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            tracing::info!(
+                slot_id, status = %r.status(),
+                "Erased slot KV cache after stall — preventing cache poisoning"
+            );
+        }
+        Ok(r) => {
+            tracing::warn!(
+                slot_id, status = %r.status(),
+                "Slot cache erase returned non-success — cache may be poisoned"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(
+                slot_id, error = %e,
+                "Failed to erase slot cache after stall — cache may be poisoned"
+            );
+        }
+    }
 }
 
 /// Calculate how many bytes can be safely emitted without splitting a potential tag.
