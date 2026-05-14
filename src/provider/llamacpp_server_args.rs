@@ -48,5 +48,25 @@ pub fn build_server_args(config: &LlamaCppConfig) -> Vec<String> {
         args.push(lora.clone());
     }
 
+    // RPC backends — when set, llama-server distributes layers across
+    // this node's GPU AND the listed remote rpc-server endpoints.
+    // Empty-string treated as None to avoid emitting `--rpc ` with no
+    // value (which llama-server rejects).
+    if let Some(ref rpc) = config.rpc_servers {
+        if !rpc.is_empty() {
+            // §13.4: surface the security posture of llama.cpp's
+            // rpc-server (unauthenticated, unencrypted) at runtime so
+            // operators see it in logs even if they never read the
+            // toml field's doc comment. Loud warn at server startup.
+            tracing::warn!(
+                rpc_servers = %rpc,
+                "RPC mesh enabled — llama.cpp rpc-server is UNAUTHENTICATED and UNENCRYPTED. \
+                 Only use on trusted private networks (e.g. Tailscale, WireGuard)."
+            );
+            args.push("--rpc".to_string());
+            args.push(rpc.clone());
+        }
+    }
+
     args
 }

@@ -107,6 +107,13 @@ pub struct LlamaCppConfig {
     /// VRAM-limited hardware.
     #[serde(default)]
     pub context_length: u32,
+    /// RPC mesh: comma-separated `host:port` list of llama.cpp rpc-server
+    /// endpoints to distribute model layers across. Empty / None = local
+    /// GPU only. Example: `"10.0.0.5:50052,10.0.0.6:50052"`. WARNING:
+    /// llama.cpp rpc-server is unauthenticated and unencrypted (§13.4).
+    /// Use only on trusted private networks (e.g. Tailscale, WireGuard).
+    #[serde(default)]
+    pub rpc_servers: Option<String>,
 }
 
 impl Default for LlamaCppConfig {
@@ -125,6 +132,7 @@ impl Default for LlamaCppConfig {
             visual_token_budget: 560,
             lora_adapter: None,
             context_length: 0,
+            rpc_servers: None,
         }
     }
 }
