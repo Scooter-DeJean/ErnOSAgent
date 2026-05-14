@@ -29,33 +29,7 @@ impl LlamaCppProvider {
 
     /// Build the llama-server command-line arguments.
     pub fn build_server_args(&self) -> Vec<String> {
-        let mut args = vec![
-            "--model".to_string(),
-            self.config.model_path.clone(),
-            "--port".to_string(),
-            self.config.port.to_string(),
-            "--jinja".to_string(), // Use model's built-in Jinja chat template for tool calling
-            "-c".to_string(),
-            "0".to_string(), // Auto-detect context from GGUF
-            "-np".to_string(),
-            "1".to_string(), // Single slot — prevents unused slots wasting KV cache
-            "-ngl".to_string(),
-            self.config.n_gpu_layers.to_string(),
-        ];
-
-        // Multimodal projector for vision support
-        if let Some(ref mmproj) = self.config.mmproj_path {
-            args.push("--mmproj".to_string());
-            args.push(mmproj.clone());
-        }
-
-        // LoRA adapter for incremental learning
-        if let Some(ref lora) = self.config.lora_adapter {
-            args.push("--lora".to_string());
-            args.push(lora.clone());
-        }
-
-        args
+        crate::provider::llamacpp_server_args::build_server_args(&self.config)
     }
 
     /// Build the request body for chat completions.
@@ -444,75 +418,5 @@ impl Provider for LlamaCppProvider {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_build_server_args_includes_jinja() {
-        let config = LlamaCppConfig::default();
-        let provider = LlamaCppProvider::new(&config);
-        let args = provider.build_server_args();
-        assert!(args.contains(&"--jinja".to_string()));
-    }
-
-    #[test]
-    fn test_build_server_args_includes_mmproj() {
-        let config = LlamaCppConfig::default();
-        let provider = LlamaCppProvider::new(&config);
-        let args = provider.build_server_args();
-        assert!(args.contains(&"--mmproj".to_string()));
-    }
-
-    #[test]
-    fn test_build_chat_body_stream() {
-        let config = LlamaCppConfig::default();
-        let provider = LlamaCppProvider::new(&config);
-        let messages = vec![Message::text("user", "Hello")];
-        let body = provider.build_chat_body(&messages, None, true, true);
-        assert_eq!(body["stream"], true);
-    }
-
-    #[test]
-    fn test_build_chat_body_with_tools() {
-        let config = LlamaCppConfig::default();
-        let provider = LlamaCppProvider::new(&config);
-        let messages = vec![Message::text("user", "Hello")];
-        let tools = serde_json::json!([{"type": "function", "function": {"name": "test"}}]);
-        let body = provider.build_chat_body(&messages, Some(&tools), true, true);
-        assert!(body["tools"].is_array());
-    }
-
-    #[test]
-    fn test_chat_sync_body_structure() {
-        let config = LlamaCppConfig::default();
-        let provider = LlamaCppProvider::new(&config);
-        let messages = vec![Message::text("user", "Test")];
-        let body = provider.build_chat_body(&messages, None, false, false);
-        assert_eq!(body["stream"], false, "chat_sync must use stream=false");
-        assert!(body["messages"].is_array());
-    }
-
-    #[test]
-    fn test_chat_sync_retry_delay_calculation() {
-        // Verify exponential backoff: 500ms, 1000ms, 2000ms
-        for attempt in 1..=3u32 {
-            let delay_ms = 500u64 * (1 << (attempt - 1));
-            match attempt {
-                1 => assert_eq!(delay_ms, 500),
-                2 => assert_eq!(delay_ms, 1000),
-                3 => assert_eq!(delay_ms, 2000),
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    #[test]
-    fn test_chat_sync_connection_error_classification() {
-        // Validate that the same error strings are checked in both chat() and chat_sync()
-        let test_messages = ["connection closed", "connection reset"];
-        for msg in &test_messages {
-            assert!(msg.contains("connection closed") || msg.contains("connection reset"),
-                "Error classification must match: {}", msg);
-        }
-    }
-}
+#[path = "llamacpp_tests.rs"]
+mod tests;
