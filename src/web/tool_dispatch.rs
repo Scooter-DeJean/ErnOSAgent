@@ -91,6 +91,8 @@ pub async fn execute_tool_with_state(
         "plan_and_execute" => crate::web::dispatch_planning::dispatch_plan_and_execute(state, &args).await,
         "session_recall" => crate::tools::session_recall_tool::execute(&args, state).await,
         "introspect" => crate::tools::introspect_tool::execute(&args, state).await,
+        "project" => dispatch_project(state, &args).await,
+        "audiobook" => crate::tools::audiobook_tool::execute(&args).await,
         "spawn_sub_agent" => dispatch_spawn_sub_agent(state, &args).await,
         other => Ok(format!("Unknown tool: {}", other)),
     };
@@ -238,6 +240,61 @@ async fn dispatch_web_search(args: &serde_json::Value) -> anyhow::Result<String>
             tracing::debug!(query = %query, "WebSearch: 8-tier waterfall search");
             crate::tools::web_search::search(query).await
         }
+    }
+}
+
+async fn dispatch_project(state: &AppState, args: &serde_json::Value) -> anyhow::Result<String> {
+    let action = args["action"].as_str().unwrap_or("");
+    let data_dir = &state.config.general.data_dir;
+
+    match action {
+        "create" => {
+            let name = args["name"].as_str().unwrap_or("Untitled Project");
+            let meta = crate::tools::project_tool::create_project(data_dir, name)?;
+            Ok(format!("Project created: '{}' (ID: {})", meta.name, meta.id))
+        }
+        "list" => {
+            let projects = crate::tools::project_tool::list_projects(data_dir)?;
+            if projects.is_empty() {
+                return Ok("No projects yet. Use project(action='create', name='...') to start one.".to_string());
+            }
+            let mut out = format!("{} project(s):\n", projects.len());
+            for p in &projects {
+                out.push_str(&format!("  {} — {} ({})\n", p.id, p.name, p.created_at.format("%Y-%m-%d")));
+            }
+            Ok(out)
+        }
+        "status" => {
+            let pid = args["project_id"].as_str().unwrap_or("");
+            if pid.is_empty() { anyhow::bail!("status requires 'project_id'"); }
+            let meta = crate::tools::project_tool::load_project(data_dir, pid)?;
+            match meta {
+                Some(m) => {
+                    let memory = state.memory.read().await;
+                    let bible_count = memory.scratchpad.by_project(pid).len();
+                    let doc_chunks: usize = memory.documents.document_names().len(); // rough
+                    Ok(format!(
+                        "Project: {}\nID: {}\nCreated: {}\nBible entries: {}\nDocument chunks: {}",
+                        m.name, m.id, m.created_at.format("%Y-%m-%d %H:%M"), bible_count, doc_chunks
+                    ))
+                }
+                None => Ok(format!("Project '{}' not found", pid)),
+            }
+        }
+        "bible" => {
+            let pid = args["project_id"].as_str().unwrap_or("");
+            if pid.is_empty() { anyhow::bail!("bible requires 'project_id'"); }
+            let bible_action = args["bible_action"].as_str().unwrap_or("list");
+            let key = args["key"].as_str();
+            let value = args["value"].as_str();
+            let category = args["category"].as_str();
+            let query = args["query"].as_str();
+            let mut memory = state.memory.write().await;
+            crate::tools::project_tool::execute_bible(
+                &mut memory.scratchpad, pid, bible_action, key, value, category, query
+            )
+        }
+        other => Ok(format!("Unknown project action: '{}'. Valid: create, list, status, bible", other)),
     }
 }
 

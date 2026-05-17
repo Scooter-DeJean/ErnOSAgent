@@ -22,6 +22,9 @@ pub struct Session {
     pub pinned: bool,
     #[serde(default)]
     pub archived: bool,
+    /// Writing project this session belongs to (None = general chat).
+    #[serde(default)]
+    pub project_id: Option<String>,
 }
 
 impl Session {
@@ -34,6 +37,7 @@ impl Session {
             updated_at: Utc::now(),
             pinned: false,
             archived: false,
+            project_id: None,
         }
     }
 

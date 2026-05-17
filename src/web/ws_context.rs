@@ -40,7 +40,7 @@ pub async fn build_chat_context(
 
     let (memory_context, memory_counts, hud_data) = {
         let memory = state.memory.read().await;
-        let ctx = memory.recall_context(content, 2000, query_embedding.as_deref());
+        let ctx = memory.recall_context(content, 2000, query_embedding.as_deref(), None);
         let counts = (
             memory.timeline.entry_count(),
             memory.lessons.count(),

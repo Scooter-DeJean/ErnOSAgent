@@ -1,8 +1,8 @@
 # Tools
 
-Ern-OS provides 31 tools across two layers. Tool schemas are defined in `src/tools/schema.rs` and `src/tools/schema_definitions.rs`. Execution is handled by `src/web/tool_dispatch.rs` (and `src/web/dispatch_planning.rs` for DAG/verification tools) which routes all tool calls through `AppState`.
+Ern-OS provides 33 tools across two layers. Tool schemas are defined in `src/tools/schema.rs`, `src/tools/schema_definitions.rs`, and `src/tools/schema_definitions_ext.rs`. Execution is handled by `src/web/tool_dispatch.rs` (and `src/web/dispatch_planning.rs` for DAG/verification tools) which routes all tool calls through `AppState`.
 
-## Layer 1 Tools (22 tools)
+## Layer 1 Tools (25 tools)
 
 Available during fast reply (Layer 1). Defined by `layer1_tools()`.
 
@@ -30,10 +30,12 @@ Available during fast reply (Layer 1). Defined by `layer1_tools()`.
 | `verify_code` | Run the verification pipeline (compile → test → browser) to validate code changes |
 | `session_recall` | Search, browse, and summarize past chat sessions |
 | `introspect` | Inspect reasoning logs, agent activity, scheduler, observer results, and system health |
+| `project` | Manage long-form writing projects — Story Bible (characters, world, timeline, themes, style), project CRUD, status |
+| `audiobook` | Generate audiobooks from manuscripts via script-reader engine (parse, voice assignment, generation, progress) |
 
 Layer 1 decides whether to answer directly or escalate. If the task is simple, it responds immediately. If complex, it calls `start_react_system` to enter Layer 2.
 
-## Layer 2 Tools (29 tools)
+## Layer 2 Tools (31 tools)
 
 Available during the ReAct loop (Layer 2). Defined by `layer2_tools()`. Includes these tools (note: not all L1 tools carry over — L2 has its own curated set):
 
@@ -108,6 +110,13 @@ All memory tools route through `tool_dispatch.rs` which accesses `AppState.memor
 | `session_recall` | `tool_dispatch.rs` | Search, browse, summarize, and extract topics from past chat sessions |
 | `introspect` | `tool_dispatch.rs` | Inspect reasoning logs, agent activity, scheduler status, observer audits, system health, and available tools |
 
+### Project & Audiobook Tools
+
+| Tool | File | Description |
+|------|------|-------------|
+| `project` | `project_tool.rs` | Long-form writing project management: create, list, status, Story Bible CRUD (characters, world, timeline, themes, style) |
+| `audiobook` | `audiobook_tool.rs` | HTTP client to script-reader (localhost:8000): parse manuscripts, list/assign voices, generate audiobooks, poll progress |
+
 ## Tool Call Flow
 
 ```
@@ -138,6 +147,8 @@ All memory tools route through `tool_dispatch.rs` which accesses `AppState.memor
    ├─ "system_logs" → system_logs::execute(args, data_dir)
    ├─ "verify_code" → dispatch_planning::dispatch_verify_code(args)
    ├─ "plan_and_execute" → dispatch_planning::dispatch_plan_and_execute(state, args)
+   ├─ "project" → dispatch_project(state, args)
+   ├─ "audiobook" → audiobook_tool::execute(args)
    └─ unknown → "Unknown tool: {name}"
 4. ToolResult { tool_call_id, name, output, success } returned
 5. Result injected into message history for next iteration
@@ -204,5 +215,7 @@ src/tools/
 ├── file_write.rs           — File writing
 ├── artifact_tool.rs        — Persistent artifact creation
 ├── image_gen_tool.rs       — Local Flux image generation
+├── project_tool.rs        — Long-form writing project management and Story Bible
+├── audiobook_tool.rs      — HTTP client to script-reader audiobook engine
 └── sub_agent_tool.rs       — Isolated sub-agent spawning (src/inference/sub_agent.rs)
 ```

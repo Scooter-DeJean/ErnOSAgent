@@ -1,5 +1,7 @@
 //! Task DAG — directed acyclic graph of sub-tasks with dependency tracking.
 
+use anyhow::{Context, Result};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -150,6 +152,29 @@ impl TaskDag {
             self.cascade_block(dep_id);
         }
     }
+
+    /// Persist the DAG to a project directory as outline.json.
+    pub fn save(&self, project_dir: &std::path::Path) -> Result<()> {
+        let path = project_dir.join("outline.json");
+        let content = serde_json::to_string_pretty(self)
+            .context("Failed to serialize TaskDag")?;
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to write outline: {}", path.display()))?;
+        tracing::info!(path = %path.display(), tasks = self.nodes.len(), "Outline saved");
+        Ok(())
+    }
+
+    /// Load a persisted DAG from a project directory.
+    pub fn load(project_dir: &std::path::Path) -> Result<Option<Self>> {
+        let path = project_dir.join("outline.json");
+        if !path.exists() { return Ok(None); }
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read outline: {}", path.display()))?;
+        let dag: TaskDag = serde_json::from_str(&content)
+            .context("Failed to parse outline JSON")?;
+        tracing::info!(path = %path.display(), tasks = dag.nodes.len(), "Outline loaded");
+        Ok(Some(dag))
+    }
 }
 
 /// Create a TaskNode with the given fields.
@@ -247,5 +272,22 @@ mod tests {
         assert_eq!(node.id, "t1");
         assert_eq!(node.status, TaskStatus::Pending);
         assert_eq!(node.depends_on, vec!["dep"]);
+    }
+
+    #[test]
+    fn test_dag_save_load_roundtrip() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let dag = sample_dag();
+        dag.save(tmp.path()).unwrap();
+        let loaded = TaskDag::load(tmp.path()).unwrap().unwrap();
+        assert_eq!(loaded.objective, "Build a blog");
+        assert_eq!(loaded.nodes.len(), 3);
+    }
+
+    #[test]
+    fn test_dag_load_missing_returns_none() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let loaded = TaskDag::load(tmp.path()).unwrap();
+        assert!(loaded.is_none());
     }
 }

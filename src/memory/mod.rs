@@ -90,17 +90,31 @@ impl MemoryManager {
     }
 
     /// Recall context as a formatted string for system prompt injection.
-    /// Allocation: Scratchpad (30%) → Lessons (20%) → Documents (15%) → Skills (15%) → Timeline (10%) → KG (10%).
-    /// `query_embedding` enables RAG retrieval from the document store when available.
-    pub fn recall_context(&self, _query: &str, budget_tokens: usize, query_embedding: Option<&[f32]>) -> String {
+    /// When `project_id` is Some, uses project-mode budget allocation
+    /// (40% bible, 25% documents) and filters to that project's data.
+    /// When None, uses global allocation (30% scratchpad, 15% documents).
+    pub fn recall_context(&self, _query: &str, budget_tokens: usize, query_embedding: Option<&[f32]>, project_id: Option<&str>) -> String {
         let total_chars = budget_tokens * 4; // ~4 chars per token
         let mut parts = Vec::new();
-        if let Some(s) = self.recall_scratchpad(total_chars * 30 / 100) { parts.push(s); }
-        if let Some(s) = self.recall_lessons(total_chars * 20 / 100) { parts.push(s); }
-        if let Some(s) = self.recall_documents(total_chars * 15 / 100, query_embedding) { parts.push(s); }
-        if let Some(s) = self.recall_procedures(total_chars * 15 / 100) { parts.push(s); }
-        if let Some(s) = self.recall_timeline(total_chars * 10 / 100) { parts.push(s); }
-        if let Some(s) = self.recall_knowledge_graph() { parts.push(s); }
+
+        if project_id.is_some() {
+            // Project mode: prioritise bible + manuscript chunks
+            if let Some(s) = self.recall_scratchpad_project(total_chars * 40 / 100, project_id.unwrap()) { parts.push(s); }
+            if let Some(s) = self.recall_documents_project(total_chars * 25 / 100, query_embedding, project_id.unwrap()) { parts.push(s); }
+            if let Some(s) = self.recall_lessons(total_chars * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_timeline(total_chars * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_procedures(total_chars * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_knowledge_graph() { parts.push(s); }
+        } else {
+            // Global mode: original allocation
+            if let Some(s) = self.recall_scratchpad(total_chars * 30 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_lessons(total_chars * 20 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_documents(total_chars * 15 / 100, query_embedding) { parts.push(s); }
+            if let Some(s) = self.recall_procedures(total_chars * 15 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_timeline(total_chars * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_knowledge_graph() { parts.push(s); }
+        }
+
         parts.join("\n")
     }
 
@@ -147,6 +161,41 @@ impl MemoryManager {
         let mut section = String::from("[Memory — Knowledge Graph]\n");
         for n in &nodes {
             section.push_str(&format!("• {} [{}]\n", n.id, n.layer));
+        }
+        Some(section)
+    }
+
+    /// Recall scratchpad entries scoped to a specific project (Story Bible).
+    fn recall_scratchpad_project(&self, budget: usize, project_id: &str) -> Option<String> {
+        let entries = self.scratchpad.by_project(project_id);
+        if entries.is_empty() { return None; }
+        let mut section = String::from("[Story Bible]\n");
+        for entry in entries {
+            let cat = entry.category.as_deref().unwrap_or("note");
+            let line = format!("• [{}] {}: {}\n", cat, entry.key, entry.value);
+            if section.len() + line.len() > budget { break; }
+            section.push_str(&line);
+        }
+        Some(section)
+    }
+
+    /// Recall document chunks scoped to a specific project.
+    fn recall_documents_project(&self, budget: usize, query_embedding: Option<&[f32]>, project_id: &str) -> Option<String> {
+        if self.documents.count() == 0 { return None; }
+        let mut section = String::from("[Manuscript Chunks]\n");
+        if let Some(qvec) = query_embedding {
+            let results = self.documents.search_by_project(project_id, qvec, 8);
+            if results.is_empty() { return None; }
+            for (chunk, score) in results {
+                let line = format!("• [{}:p{}] ({:.2}) {}\n",
+                    chunk.document_name, chunk.page, score,
+                    &chunk.content.chars().take(500).collect::<String>());
+                if section.len() + line.len() > budget { break; }
+                section.push_str(&line);
+            }
+        } else {
+            let names = self.documents.document_names();
+            section.push_str(&format!("Project documents: {}\n", names.join(", ")));
         }
         Some(section)
     }

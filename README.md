@@ -12,14 +12,14 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" />
-  <img src="https://img.shields.io/badge/tests-669%20passing-brightgreen?style=flat-square" />
+  <img src="https://img.shields.io/badge/tests-714%20passing-brightgreen?style=flat-square" />
   <img src="https://img.shields.io/badge/warnings-0-brightgreen?style=flat-square" />
   <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" />
 </p>
 
 ---
 
-Ern-OS is a high-performance AI agent engine that runs entirely on your hardware. No cloud. No telemetry. No API keys required. Point it at any GGUF model via `llama-server`, and you get a full agentic system: a dual-layer inference engine with ReAct reasoning, a 31-tool executor, a 7-tier persistent memory system, an observer audit pipeline, autonomous learning, and a 12-tab WebUI dashboard — all compiled into a single Rust binary.
+Ern-OS is a high-performance AI agent engine that runs entirely on your hardware. No cloud. No telemetry. No API keys required. Point it at any GGUF model via `llama-server`, and you get a full agentic system: a dual-layer inference engine with ReAct reasoning, a 33-tool executor, an 8-tier persistent memory system, an observer audit pipeline, autonomous learning, and a 12-tab WebUI dashboard — all compiled into a single Rust binary.
 
 Created by [@mettamazza](https://github.com/mettamazza)
 
@@ -62,22 +62,23 @@ User ──→ WebUI (localhost:3000)
     │         Dual-Layer Inference Engine      │
     │                                          │
     │  Layer 1 (L1): Fast single-shot reply    │
-    │  ─ 22 tools, streaming, sub-second       │
+    │  ─ 25 tools, streaming, sub-second       │
     │                                          │
     │  Layer 2 (L2): ReAct reasoning loop      │
-    │  ─ 29 tools, multi-turn, autonomous      │
+    │  ─ 31 tools, multi-turn, autonomous      │
     │  ─ Model-driven turn management          │
     │  ─ Observer audit on every reply          │
     ├──────────────────────────────────────────┤
-    │  31-Tool Executor                        │
+    │  33-Tool Executor                        │
     │  shell · web · files · browser · memory  │
     │  sub-agents · artifacts · codebase edit  │
     │  image gen · SAE · steering · learning   │
+    │  project management · audiobook gen      │
     ├──────────────────────────────────────────┤
-    │  7-Tier Persistent Memory                │
+    │  8-Tier Persistent Memory                │
     │  timeline · scratchpad · lessons ·       │
     │  synaptic · procedures · embeddings ·    │
-    │  consolidation                           │
+    │  consolidation · documents               │
     ├──────────────────────────────────────────┤
     │  Learning Pipeline                       │
     │  golden buffer · rejection buffer ·      │
@@ -90,7 +91,7 @@ User ──→ WebUI (localhost:3000)
 
 ### Dual-Layer Inference
 
-**Layer 1** handles straightforward requests — the model gets a single inference call with 22 tools (including memory, search, files, browser, planning, verification, session recall, introspection, and escalation). If the task requires multi-step reasoning, it escalates to Layer 2.
+**Layer 1** handles straightforward requests — the model gets a single inference call with 25 tools (including memory, search, files, browser, planning, verification, session recall, introspection, project management, audiobook generation, and escalation). If the task requires multi-step reasoning, it escalates to Layer 2.
 
 **Layer 2** runs a full ReAct loop: the model reasons, calls tools, observes results, and continues until it decides it's done. Turn management is model-driven — the model requests extensions when it needs more turns. An Observer audits every reply for quality, hallucination, and completeness before it reaches the user.
 
@@ -104,7 +105,7 @@ Ern-OS doesn't care what model you run. The `Provider` trait abstracts all infer
 
 ## Tools
 
-31 native tools, all executing locally:
+33 native tools, all executing locally:
 
 | Tool | What It Does |
 |------|-------------|
@@ -131,22 +132,25 @@ Ern-OS doesn't care what model you run. The `Provider` trait abstracts all infer
 | `verify_code` | Run the verification pipeline (compile → test → browser) to validate code changes |
 | `session_recall` | Search, browse, and summarize past chat sessions |
 | `introspect` | Inspect reasoning logs, agent activity, scheduler, observer results, and system health |
+| `project` | Manage long-form writing projects — Story Bible (characters, world, timeline, themes, style), project CRUD, status |
+| `audiobook` | Generate audiobooks from manuscripts via script-reader engine (parse, voice assignment, generation, progress) |
 
 ## Memory System
 
-7 tiers of persistent memory, all stored locally as JSON:
+8 tiers of persistent memory, all stored locally as JSON:
 
 | Tier | Purpose | Persistence |
 |------|---------|-------------|
 | **Timeline** | Chronological event log — every tool call, every interaction | Append-only |
-| **Scratchpad** | Working memory for the current task | Session-scoped |
+| **Scratchpad** | Working memory — pinned key-value facts, Story Bible entries | Session/project-scoped |
 | **Lessons** | Distilled learnings from past mistakes and successes | Permanent |
 | **Synaptic** | High-signal knowledge graph with weighted connections | Permanent |
 | **Procedures** | Executable skill recipes synthesised from experience | Permanent |
 | **Embeddings** | Vector store for semantic recall | Permanent |
 | **Consolidation** | Sleep-cycle memory compression and pruning | Scheduled |
+| **Documents** | Chunked document store with embedding-based RAG retrieval | Permanent |
 
-Memory is automatically recalled at inference time and injected into the system prompt. The consolidation engine runs on a configurable schedule to compress, prune, and strengthen memory based on access patterns.
+Memory is automatically recalled at inference time and injected into the system prompt. When a writing project is active, the memory budget shifts to prioritise the Story Bible (40%) and manuscript chunks (25%) over global context. The consolidation engine runs on a configurable schedule to compress, prune, and strengthen memory based on access patterns.
 
 ## Observer
 
@@ -231,15 +235,15 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 | Metric | Value |
 |--------|-------|
 | Language | Rust (Edition 2021) |
-| Source files | 183 `.rs` files |
-| Lines of code | ~29,000 |
-| Tests | 669 passing |
+| Source files | 233 `.rs` files |
+| Lines of code | ~45,500 |
+| Tests | 714 passing |
 | Test failures | 0 |
 | Compiler warnings | 0 |
-| Tools | 31 unique (22 in L1, 29 in L2) |
+| Tools | 33 unique (25 in L1, 31 in L2) |
 | API endpoints | 95 REST + 3 WebSocket (chat, voice, video) |
 | Dashboard tabs | 12 |
-| Memory tiers | 7 |
+| Memory tiers | 8 |
 | Providers | 3 (llamacpp, ollama, openai-compatible) |
 | Auto-launching services | 4 (WebUI, Kokoro TTS, Flux image gen, code-server) |
 
@@ -252,7 +256,7 @@ See [docs/configuration.md](docs/configuration.md) for the full reference.
 | [Memory System](docs/memory.md) | 7-tier memory architecture and consolidation |
 | [Inference Pipeline](docs/inference.md) | Dual-layer engine, ReAct loop, observer audit |
 | [Learning Pipeline](docs/learning.md) | LoRA, GRPO, sleep consolidation, curriculum schooling (K-12 → PhD), research engine, spaced repetition |
-| [Tools](docs/tools.md) | 29-tool registry with schemas and parallel execution |
+| [Tools](docs/tools.md) | 33-tool registry with schemas and parallel execution |
 | [Interpretability](docs/interpretability.md) | SAE, feature analysis, steering vectors |
 | [Provider Interface](docs/providers.md) | Provider trait, implementations, model neutrality |
 | [Testing](docs/testing.md) | Test structure, coverage, running tests |

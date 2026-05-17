@@ -14,6 +14,9 @@ use std::path::{Path, PathBuf};
 pub struct DocumentChunk {
     pub id: String,
     pub document_name: String,
+    /// Project ID for scoping chunks to a writing project.
+    #[serde(default)]
+    pub project_id: Option<String>,
     pub page: usize,
     pub chunk_index: usize,
     pub content: String,
@@ -54,6 +57,18 @@ impl DocumentStore {
         provider: &dyn crate::provider::Provider,
         context_length: usize,
     ) -> Result<usize> {
+        self.ingest_document_with_project(name, pages, provider, context_length, None).await
+    }
+
+    /// Ingest document pages scoped to a writing project.
+    pub async fn ingest_document_with_project(
+        &mut self,
+        name: &str,
+        pages: &[(usize, String)],
+        provider: &dyn crate::provider::Provider,
+        context_length: usize,
+        project_id: Option<&str>,
+    ) -> Result<usize> {
         let chunk_size = chunk_size_chars(context_length);
         let mut count = 0;
 
@@ -66,6 +81,7 @@ impl DocumentStore {
                 self.chunks.push(DocumentChunk {
                     id: uuid::Uuid::new_v4().to_string(),
                     document_name: name.to_string(),
+                    project_id: project_id.map(|s| s.to_string()),
                     page: *page,
                     chunk_index: idx,
                     content: chunk_text.clone(),
@@ -92,6 +108,17 @@ impl DocumentStore {
     }
 
     pub fn count(&self) -> usize { self.chunks.len() }
+
+    /// Semantic search scoped to a specific project.
+    pub fn search_by_project(&self, project_id: &str, query_vec: &[f32], top_k: usize) -> Vec<(&DocumentChunk, f32)> {
+        let mut scored: Vec<_> = self.chunks.iter()
+            .filter(|c| c.project_id.as_deref() == Some(project_id))
+            .map(|c| (c, crate::memory::embeddings::cosine_similarity(query_vec, &c.vector)))
+            .collect();
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+        scored
+    }
 
     pub fn document_names(&self) -> Vec<String> {
         let mut names: Vec<String> = self.chunks.iter()
@@ -213,6 +240,7 @@ mod tests {
         store.chunks.push(DocumentChunk {
             id: "1".into(),
             document_name: "book.md".into(),
+            project_id: None,
             page: 1,
             chunk_index: 0,
             content: "test".into(),
@@ -222,6 +250,7 @@ mod tests {
         store.chunks.push(DocumentChunk {
             id: "2".into(),
             document_name: "other.md".into(),
+            project_id: None,
             page: 1,
             chunk_index: 0,
             content: "other".into(),
@@ -232,5 +261,31 @@ mod tests {
         store.remove_document("book.md");
         assert_eq!(store.count(), 1);
         assert_eq!(store.document_names(), vec!["other.md".to_string()]);
+    }
+
+    #[test]
+    fn test_search_by_project() {
+        let mut store = DocumentStore::new();
+        store.chunks.push(DocumentChunk {
+            id: "1".into(),
+            document_name: "novel.md".into(),
+            project_id: Some("novel-1".into()),
+            page: 1, chunk_index: 0,
+            content: "chapter one".into(),
+            vector: vec![1.0, 0.0],
+            created_at: chrono::Utc::now(),
+        });
+        store.chunks.push(DocumentChunk {
+            id: "2".into(),
+            document_name: "other.md".into(),
+            project_id: Some("novel-2".into()),
+            page: 1, chunk_index: 0,
+            content: "unrelated".into(),
+            vector: vec![0.5, 0.5],
+            created_at: chrono::Utc::now(),
+        });
+        let results = store.search_by_project("novel-1", &[1.0, 0.0], 5);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0.document_name, "novel.md");
     }
 }

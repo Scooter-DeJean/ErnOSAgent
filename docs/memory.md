@@ -1,6 +1,6 @@
 # Memory System
 
-Ern-OS uses a 7-tier persistent memory system. All tiers are fields on `MemoryManager` (defined in `src/memory/mod.rs`) and are disk-persisted as JSON files under `data/`.
+Ern-OS uses an 8-tier persistent memory system. All tiers are fields on `MemoryManager` (defined in `src/memory/mod.rs`) and are disk-persisted as JSON files under `data/`.
 
 ## Tier Overview
 
@@ -13,6 +13,7 @@ Ern-OS uses a 7-tier persistent memory system. All tiers are fields on `MemoryMa
 | 5. Procedures | `ProcedureStore` | `src/memory/procedures.rs` | Named multi-step procedures |
 | 6. Embeddings | `EmbeddingStore` | `src/memory/embeddings.rs` | Vector store for semantic search |
 | 7. Consolidation | `ConsolidationEngine` | `src/memory/consolidation.rs` | Tracks context consolidation events |
+| 8. Documents | `DocumentStore` | `src/memory/document_store.rs` | Chunked document store with embedding-based RAG |
 
 ## MemoryManager
 
@@ -25,6 +26,7 @@ pub struct MemoryManager {
     pub lessons: LessonStore,
     pub procedures: ProcedureStore,
     pub synaptic: SynapticGraph,
+    pub documents: DocumentStore,
 }
 ```
 
@@ -33,22 +35,36 @@ pub struct MemoryManager {
 | Method | Description |
 |--------|-------------|
 | `new(data_dir)` | Initialise all 7 tiers, loading from disk |
-| `recall_context(query, budget_tokens)` | Build context string with token budget allocation |
+| `recall_context(query, budget_tokens, embedding, project_id)` | Build context string with token budget allocation (project-aware) |
 | `ingest_turn(role, content, session_id)` | Add a message to timeline |
 | `status_summary()` | Human-readable status of all tiers |
 | `clear()` | Reset all tiers |
 
 ## Context Recall Budget
 
-`recall_context()` allocates the token budget across tiers:
+`recall_context()` allocates the token budget across tiers. Allocation shifts when a writing project is active:
+
+### Global Mode (no active project)
 
 | Tier | Allocation | Content |
 |------|------------|---------|
-| Scratchpad | 35% | Pinned key-value facts |
-| Lessons | 25% | High-confidence rules (≥0.8) |
-| Procedures (Skills) | 15% | Known skill names + descriptions (L0 loading) |
-| Timeline | 15% | Recent 10 entries (120 char preview) |
-| Knowledge Graph | 10% | Recent 5 nodes (id + layer) |
+| Scratchpad | 30% | Pinned key-value facts |
+| Lessons | 20% | High-confidence rules (≥0.8) |
+| Documents | 15% | RAG-retrieved document chunks |
+| Procedures (Skills) | 15% | Known skill names + descriptions |
+| Timeline | 10% | Recent entries |
+| Knowledge Graph | 10% | Recent nodes |
+
+### Project Mode (active writing project)
+
+| Tier | Allocation | Content |
+|------|------------|---------|
+| Story Bible | 40% | Project-scoped scratchpad entries (characters, world, timeline) |
+| Manuscript Chunks | 25% | Project-scoped document chunks via RAG |
+| Lessons | 10% | High-confidence rules |
+| Timeline | 10% | Recent entries |
+| Procedures | 10% | Known skill names |
+| Knowledge Graph | 5% | Recent nodes |
 
 The budget is computed as `budget_tokens × 4` (approximating 4 chars per token).
 
@@ -64,9 +80,9 @@ The budget is computed as `budget_tokens × 4` (approximating 4 chars per token)
 ### 2. Scratchpad
 
 - **Storage**: `Vec<ScratchpadEntry>` serialised to `data/scratchpad.json`
-- **Entry fields**: `key`, `value`, `updated_at`
-- **API**: `pin(key, value)`, `unpin(key)`, `get(key)`, `all()`, `count()`
-- **Behaviour**: `pin()` upserts — if key exists, the value is replaced
+- **Entry fields**: `key`, `value`, `pinned`, `project_id` (optional), `category` (optional: character/world/timeline/theme/style)
+- **API**: `pin(key, value)`, `pin_with_project(key, value, project_id, category)`, `unpin(key)`, `get(key)`, `all()`, `count()`, `by_project(project_id)`, `by_project_and_category(project_id, category)`
+- **Behaviour**: `pin()` upserts — if key exists, the value is replaced. `pin_with_project()` scopes entries to a writing project with an optional category for Story Bible management.
 
 ### 3. Lessons
 
@@ -130,4 +146,8 @@ data/
 │   └── snapshot_*.json
 └── sessions/
     └── {uuid}.json
+projects/
+└── {uuid}/
+    ├── meta.json
+    └── outline.json
 ```

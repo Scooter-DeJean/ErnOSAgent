@@ -196,6 +196,8 @@ pub fn layer1_tools() -> serde_json::Value {
         system_logs_tool_schema(),
         session_recall_tool_schema(),
         introspect_tool_schema(),
+        project_tool_schema(),
+        audiobook_tool_schema(),
     ])
 }
 
@@ -231,6 +233,8 @@ pub fn layer2_tools() -> serde_json::Value {
         system_logs_tool_schema(),
         session_recall_tool_schema(),
         introspect_tool_schema(),
+        project_tool_schema(),
+        audiobook_tool_schema(),
     ])
 }
 
@@ -280,7 +284,7 @@ mod tests {
     fn test_layer1_tools() {
         let tools = layer1_tools();
         let arr = tools.as_array().unwrap();
-        assert_eq!(arr.len(), 23, "L1 should have 23 tools");
+        assert_eq!(arr.len(), 25, "L1 should have 25 tools");
         assert!(arr.iter().any(|t| t["function"]["name"] == "start_react_system"));
         assert!(arr.iter().any(|t| t["function"]["name"] == "memory"));
         assert!(arr.iter().any(|t| t["function"]["name"] == "scratchpad"));
@@ -288,6 +292,8 @@ mod tests {
         assert!(arr.iter().any(|t| t["function"]["name"] == "system_logs"));
         assert!(arr.iter().any(|t| t["function"]["name"] == "plan_and_execute"));
         assert!(arr.iter().any(|t| t["function"]["name"] == "verify_code"));
+        assert!(arr.iter().any(|t| t["function"]["name"] == "project"));
+        assert!(arr.iter().any(|t| t["function"]["name"] == "audiobook"));
         // Self-coding tools must NOT be in L1 — require ReAct planning
         assert!(!arr.iter().any(|t| t["function"]["name"] == "codebase_edit"));
         assert!(!arr.iter().any(|t| t["function"]["name"] == "checkpoint"));
