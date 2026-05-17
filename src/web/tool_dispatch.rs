@@ -284,7 +284,10 @@ async fn dispatch_project(state: &AppState, args: &serde_json::Value) -> anyhow:
         "bible" => {
             let pid = args["project_id"].as_str().unwrap_or("");
             if pid.is_empty() { anyhow::bail!("bible requires 'project_id'"); }
-            let bible_action = args["bible_action"].as_str().unwrap_or("list");
+            let bible_action = args["bible_action"].as_str().unwrap_or_else(|| {
+                // Infer intent: if key+value provided, the model wants "add"
+                if args["key"].is_string() && args["value"].is_string() { "add" } else { "list" }
+            });
             let key = args["key"].as_str();
             let value = args["value"].as_str();
             let category = args["category"].as_str();
