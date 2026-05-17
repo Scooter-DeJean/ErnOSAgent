@@ -285,6 +285,14 @@ async fn handle_chat_message(
             let tc = schema::ToolCall { id, name, arguments };
             run_l1_tool_chain(state, provider, sink.sender, &mut messages, &tools, content, session_id, tc, pending_chain, stop_flag).await;
         }
+        ConsumeResult::ToolCalls(calls) => {
+            // Multi-tool-call dispatch path. Extracted to ws_l1.rs per §1.1
+            // to keep ws.rs under the 500-line cap.
+            handle_initial_multi_tool_dispatch(
+                state, provider, sink.sender, &mut messages, &tools, content, session_id,
+                calls, pending_chain, stop_flag,
+            ).await;
+        }
         ConsumeResult::Error(e) => {
             tracing::error!(error = %e, "L1 result: Error");
             send_ws(sink.sender, "error", &serde_json::json!({"message": e})).await;
@@ -464,7 +472,7 @@ async fn handle_plan_decision(
 }
 
 // L1 tool chain handler extracted to ws_l1.rs for governance compliance.
-use crate::web::ws_l1::{deliver_reply, run_l1_tool_chain};
+use crate::web::ws_l1::{deliver_reply, handle_initial_multi_tool_dispatch, run_l1_tool_chain};
 
 
 // ReAct loop execution is in crate::web::ws_react.
