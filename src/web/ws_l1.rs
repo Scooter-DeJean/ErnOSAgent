@@ -1,4 +1,11 @@
-// Ern-OS — Layer 1 tool chain handler (extracted from ws.rs for governance compliance).
+// Ern-OS — High-performance, model-neutral Rust AI agent engine
+// Created by @mettamazza (github.com/mettamazza)
+// License: MIT
+//! Layer-1 (L1) tool-chain handler — extracted from ws.rs per §1.1 file-size
+//! governance. Owns the L1 inference loop that runs after a
+//! `ConsumeResult::ToolCall(s)` result lands: dispatches tool calls,
+//! accumulates tool-result messages, re-prompts the model, and either exits
+//! via `Reply` or transitions to `ws_react`.
 
 use crate::provider::Message;
 use crate::tools::schema;
@@ -175,6 +182,36 @@ pub async fn run_l1_tool_chain(
                 tracing::info!(tool = %name, id = %id, iteration = tool_iter + 1, "L1 chain → another ToolCall");
                 current_tc = schema::ToolCall { id, name, arguments };
             }
+            ConsumeResult::ToolCalls(calls) => {
+                // Model emitted multiple tool calls in this chain iteration.
+                // Dispatch all but the last inline (with UI events and
+                // message appends), then continue the chain using the last
+                // call as the next current_tc. The next loop iteration will
+                // execute that last call and re-prompt the model with all
+                // accumulated tool results.
+                let count = calls.len();
+                tracing::info!(count, iteration = tool_iter + 1, "L1 chain → ToolCalls (multi-call dispatch)");
+                // Track leading tools in chain_tools so stash_chain captures the full set.
+                chain_tools.extend(
+                    calls.iter().take(count.saturating_sub(1))
+                        .map(|(_, name, args)| (name.clone(), args.clone()))
+                );
+                let executor = StateToolExecutor { state };
+                let dispatch_result = {
+                    let mut dispatch_sink = WsDispatchSink { sender: &mut *sink.sender, messages: &mut *messages };
+                    dispatch_leading_tool_calls(&mut dispatch_sink, &executor, calls).await
+                };
+                match dispatch_result {
+                    Some(last_tc) => current_tc = last_tc,
+                    None => {
+                        // ToolCalls with empty Vec — stream_consumer invariant violation.
+                        // Surface and break the chain rather than spin silently.
+                        tracing::error!(iteration = tool_iter + 1, "L1 chain: ToolCalls(empty) — stream_consumer invariant violated");
+                        send_ws(sink.sender, "error", &serde_json::json!({"message": "Internal error: empty tool call set in chain"})).await;
+                        break;
+                    }
+                }
+            }
             ConsumeResult::Escalate { objective, plan, planned_turns } => {
                 tracing::info!(objective = %objective, planned_turns, "L1 chain → Escalate");
                 stop_flag.store(false, std::sync::atomic::Ordering::Relaxed);
@@ -206,6 +243,162 @@ pub async fn run_l1_tool_chain(
 
     stash_chain(pending_chain, chain_tools, content, &chain_reply, session_id);
     send_ws(sender, "done", &serde_json::json!({})).await;
+}
+
+// ============================================================================
+// Test-injection traits — abstractions over WS sink + tool executor for
+// `dispatch_leading_tool_calls`. Production callers use the WS-backed and
+// AppState-backed impls below; unit tests use CapturingDispatchSink and
+// MockToolExecutor in ws_l1_tests.rs.
+// ============================================================================
+
+/// Sink for the side-effects of [`dispatch_leading_tool_calls`]: WS events
+/// and message-history appends. Abstracted so unit tests can assert what was
+/// sent / pushed without spinning up a real WebSocket or AppState.
+#[async_trait::async_trait]
+pub trait DispatchSink: Send {
+    /// Send a typed WS event with the given payload.
+    async fn send_event(&mut self, msg_type: &str, payload: serde_json::Value);
+    /// Append a message to the history.
+    fn push_message(&mut self, msg: Message);
+}
+
+/// Production [`DispatchSink`] — forwards to the real `send_ws` and pushes
+/// onto the real message-history vec.
+pub struct WsDispatchSink<'a, 'b> {
+    pub sender: &'a mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
+    pub messages: &'b mut Vec<Message>,
+}
+
+#[async_trait::async_trait]
+impl<'a, 'b> DispatchSink for WsDispatchSink<'a, 'b> {
+    async fn send_event(&mut self, msg_type: &str, payload: serde_json::Value) {
+        send_ws(self.sender, msg_type, &payload).await;
+    }
+    fn push_message(&mut self, msg: Message) {
+        self.messages.push(msg);
+    }
+}
+
+/// Tool-executor abstraction for [`dispatch_leading_tool_calls`]. Abstracted
+/// so unit tests can return canned [`schema::ToolResult`] values without
+/// needing a real AppState + tool-dispatch pipeline.
+#[async_trait::async_trait]
+pub trait ToolExecutor: Send + Sync {
+    /// Execute a single tool call and return its result.
+    async fn execute(&self, tc: &schema::ToolCall) -> schema::ToolResult;
+}
+
+/// Production [`ToolExecutor`] — forwards to the real tool dispatcher with
+/// the captured AppState.
+pub struct StateToolExecutor<'a> {
+    pub state: &'a AppState,
+}
+
+#[async_trait::async_trait]
+impl<'a> ToolExecutor for StateToolExecutor<'a> {
+    async fn execute(&self, tc: &schema::ToolCall) -> schema::ToolResult {
+        crate::web::tool_dispatch::execute_tool_with_state(self.state, tc).await
+    }
+}
+
+/// Execute leading tool calls inline and return the last call for the caller
+/// to drive the L1 chain. Used when the model emits multiple tool calls in
+/// a single inference turn — the leading calls are dispatched concretely
+/// (sending `tool_executing` / `tool_completed` UI events and appending
+/// assistant `tool_call` + `tool_result` messages), then the caller starts
+/// the L1 chain using the last call as its entry point. The chain's
+/// re-prompt then sees the full set of leading results in the message
+/// history.
+///
+/// Returns `None` only if `calls` is empty, which violates the
+/// [`crate::inference::stream_consumer::ConsumeResult::ToolCalls`] invariant
+/// (the variant is constructed only for `len() > 1`). Callers must surface
+/// this case explicitly rather than silently dropping the turn.
+///
+/// Generic over [`DispatchSink`] + [`ToolExecutor`] so unit tests in
+/// `ws_l1_tests.rs` can verify the side-effect contract — `tool_executing`
+/// / `tool_completed` events, message-history appends, and executor
+/// invocations — via capturing test impls. Production callers construct
+/// [`WsDispatchSink`] + [`StateToolExecutor`] (see
+/// `handle_initial_multi_tool_dispatch` and the `ConsumeResult::ToolCalls`
+/// arm of `run_l1_tool_chain` for examples).
+pub async fn dispatch_leading_tool_calls<S, E>(
+    sink: &mut S,
+    executor: &E,
+    calls: Vec<(String, String, String)>,
+) -> Option<schema::ToolCall>
+where
+    S: DispatchSink,
+    E: ToolExecutor,
+{
+    let mut tcs: Vec<schema::ToolCall> = calls.into_iter()
+        .map(|(id, name, arguments)| schema::ToolCall { id, name, arguments })
+        .collect();
+    let last_tc = tcs.pop()?;
+    for tc in &tcs {
+        sink.send_event("tool_executing", serde_json::json!({"name": &tc.name, "id": &tc.id})).await;
+        let result = executor.execute(tc).await;
+        tracing::info!(tool = %tc.name, success = result.success, output_len = result.output.len(), "L1 leading tool: execution complete");
+        sink.send_event("tool_completed", serde_json::json!({
+            "id": &tc.id, "name": &tc.name,
+            "result": &result.output, "success": result.success,
+        })).await;
+        sink.push_message(Message::assistant_tool_call(&tc.id, &tc.name, &tc.arguments));
+        if result.images.is_empty() {
+            sink.push_message(Message::tool_result(&tc.id, &result.output));
+        } else {
+            sink.push_message(Message::tool_result_multipart(&tc.id, &result.output, result.images));
+        }
+    }
+    // Budget enforcement is intentionally deferred to the chain: the caller
+    // passes `last_tc` to `run_l1_tool_chain`, which calls
+    // `enforce_context_budget` after each tool result iteration (see
+    // ws_l1.rs `run_l1_tool_chain` ~ L116). Mirrors the canonical pattern
+    // in `platform_ingest.rs:192-215` which also does not enforce budget
+    // during leading-call dispatch.
+    Some(last_tc)
+}
+
+/// Handle the initial-turn ConsumeResult::ToolCalls path: log, dispatch
+/// leading calls inline, then either enter the L1 chain on the last call
+/// (the normal case) or surface an empty-Vec invariant violation. Extracted
+/// from `ws::handle_chat_message`'s match arm to keep `ws.rs` under the
+/// §1.1 500-line cap.
+pub async fn handle_initial_multi_tool_dispatch(
+    state: &AppState,
+    provider: &dyn crate::provider::Provider,
+    sender: &mut futures_util::stream::SplitSink<WebSocket, WsMessage>,
+    messages: &mut Vec<Message>,
+    tools: &serde_json::Value,
+    content: &str,
+    session_id: &str,
+    calls: Vec<(String, String, String)>,
+    pending_chain: &mut Option<PendingToolChain>,
+    stop_flag: &std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let count = calls.len();
+    crate::tools::introspect_tool::log_reasoning_event(
+        &state.config.general.data_dir, session_id,
+        &serde_json::json!({"type":"inference","result":"tool_calls","count": count}),
+        None);
+    tracing::info!(count, "L1 result: ToolCalls (multi-call dispatch)");
+    let executor = StateToolExecutor { state };
+    let dispatch_result = {
+        let mut dispatch_sink = WsDispatchSink { sender: &mut *sender, messages: &mut *messages };
+        dispatch_leading_tool_calls(&mut dispatch_sink, &executor, calls).await
+    };
+    match dispatch_result {
+        Some(last_tc) => {
+            run_l1_tool_chain(state, provider, sender, messages, tools, content, session_id, last_tc, pending_chain, stop_flag).await;
+        }
+        None => {
+            // ToolCalls with empty Vec — stream_consumer invariant violation.
+            // Surface explicitly rather than silently dropping the turn.
+            tracing::error!("L1 result: ToolCalls(empty) — stream_consumer invariant violated");
+            send_ws(sender, "error", &serde_json::json!({"message": "Internal error: empty tool call set"})).await;
+        }
+    }
 }
 
 /// Stash a completed tool chain for delayed reinforcement on the next turn.
@@ -241,3 +434,8 @@ async fn capture_leak_dpo(state: &AppState, user_query: &str, chosen: &str, reje
         tracing::info!("DPO pair captured: tool output leak → rejection buffer");
     }
 }
+
+
+#[cfg(test)]
+#[path = "ws_l1_tests.rs"]
+mod tests;
