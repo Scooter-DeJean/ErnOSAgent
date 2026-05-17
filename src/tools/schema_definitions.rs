@@ -43,7 +43,7 @@ pub fn memory_tool_schema() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "memory",
-            "description": "Interact with the 7-tier cognitive memory system. Actions: recall, status, consolidate, search, reset",
+            "description": "Interact with the 8-tier cognitive memory system. Actions: recall, status, consolidate, search, reset",
             "parameters": {
                 "type": "object",
                 "properties": {

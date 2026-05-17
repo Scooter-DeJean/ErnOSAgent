@@ -1,7 +1,7 @@
 // Ern-OS — High-performance, model-neutral Rust AI agent engine
 // Created by @mettamazza (github.com/mettamazza)
 // License: MIT
-//! 7-Tier Cognitive Memory Architecture.
+//! 8-Tier Cognitive Memory Architecture.
 //!
 //! Tier 1: Working context (inference/context — not stored here)
 //! Tier 2: Consolidation — summarize overflow sessions

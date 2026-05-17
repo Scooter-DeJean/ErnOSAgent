@@ -34,7 +34,7 @@ pub struct MemoryManager {
 
 | Method | Description |
 |--------|-------------|
-| `new(data_dir)` | Initialise all 7 tiers, loading from disk |
+| `new(data_dir)` | Initialise all 8 tiers, loading from disk |
 | `recall_context(query, budget_tokens, embedding, project_id)` | Build context string with token budget allocation (project-aware) |
 | `ingest_turn(role, content, session_id)` | Add a message to timeline |
 | `status_summary()` | Human-readable status of all tiers |

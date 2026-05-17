@@ -1,5 +1,5 @@
 /* Ern-OS — WebUI Application */
-/* Dual-layer inference, 7-tier memory, observer audit, autonomous learning, self-skills, 29 tools */
+/* Dual-layer inference, 8-tier memory, observer audit, autonomous learning, self-skills, 33 tools */
 
 const ErnOS = (() => {
     'use strict';
@@ -2683,7 +2683,7 @@ const ErnOS = (() => {
                     <div class="setting-row">
                         <div class="setting-label">
                             <span class="label-text">Memory</span>
-                            <span class="label-desc">7-tier cognitive memory status</span>
+                            <span class="label-desc">8-tier cognitive memory status</span>
                         </div>
                         <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-secondary);max-width:300px;text-align:right">${escapeHtml(typeof status.memory === 'string' ? status.memory : JSON.stringify(status.memory))}</span>
                     </div>
@@ -3449,10 +3449,10 @@ const ErnOS = (() => {
         return `<div class="welcome" id="welcome">
             <div class="welcome-logo">E</div>
             <h2>Welcome to Ern-OS</h2>
-            <p>High-performance AI engine with dual-layer inference, 7-tier cognitive memory, 16 tools, observer audit, autonomous learning, and self-skills.</p>
+            <p>High-performance AI engine with dual-layer inference, 8-tier cognitive memory, 16 tools, observer audit, autonomous learning, and self-skills.</p>
             <div class="welcome-features">
                 <div class="feature-card" onclick="ErnOS.switchView('memory')">
-                    <span>🧠</span><strong>7-Tier Memory</strong>
+                    <span>🧠</span><strong>8-Tier Memory</strong>
                     <small>Timeline, Lessons, Procedures, Scratchpad, Synaptic, Embeddings, Consolidation</small>
                 </div>
                 <div class="feature-card" onclick="ErnOS.switchView('tools')">
