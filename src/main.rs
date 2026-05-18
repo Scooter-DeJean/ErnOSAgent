@@ -425,6 +425,7 @@ fn build_app_state(
         quarantine: Arc::new(RwLock::new(quarantine)),
         review_deck: Arc::new(RwLock::new(review_deck)),
         mesh_runtime: Arc::new(RwLock::new(mesh_runtime)),
+        digest_store: ern_os::web::handlers::background_digest::new_digest_store(),
     })
 }
 

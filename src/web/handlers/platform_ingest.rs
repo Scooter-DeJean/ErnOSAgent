@@ -59,25 +59,97 @@ pub async fn platform_ingest(
         &msg.attachments, msg.is_admin,
     ).await;
     let (images, attachment_text) = crate::web::attachment_ingest::split_processed(
-        &processed, state.model_spec.context_length,
+        &processed,
     );
-    // Deep-read: if admin attachment exceeds inline budget, summarise page-by-page.
-    // Track which attachments get deep-read so we can REPLACE their inline text with the digest.
+    // Select tools early so their token cost is included in the base context measurement below.
+    let tools = select_tools(msg.is_admin);
+    let tools_chars = tools.to_string().len();
+
+    // Deep-read: if admin attachment token cost exceeds the remaining context budget,
+    // summarise page-by-page instead of injecting inline.
+    // Budget = context_length minus the measured cost of the base context (no attachments).
+    // Both values derived from provider.count_tokens() — no heuristics (§2.1, §8.3).
+    let provider = state.provider.as_ref();
     let mut deep_read_digests: Vec<(String, String)> = Vec::new();
     if msg.is_admin {
+        let base_messages = crate::web::ws_context::build_chat_context(
+            &state, &msg.content, &session_id, None, vec![], &msg.platform, tools_chars,
+        ).await.messages;
+        let base_token_cost = match provider.count_tokens(
+            &base_messages, Some(&tools), state.config.prompt.thinking_enabled,
+        ).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::warn!(error = %e,
+                    "count_tokens failed for base context — defaulting to deep-read for all admin attachments");
+                state.model_spec.context_length
+            }
+        };
+        let remaining_tokens = state.model_spec.context_length.saturating_sub(base_token_cost);
+        tracing::info!(
+            context_length = state.model_spec.context_length,
+            base_token_cost, remaining_tokens,
+            "Deep-read gate: measured base context cost"
+        );
         for att in &processed {
-            // Skip images — they're already handled as multimodal data URLs, not text.
             if att.image_data_url.is_some() { continue; }
-            if let (Some(ref path), true) = (&att.saved_path, att.exceeds_budget(state.model_spec.context_length)) {
-                let config = crate::web::attachment_reader::DeepReadConfig {
-                    path: path.clone(),
-                    filename: att.filename.clone(),
-                    context_length: state.model_spec.context_length,
+            if let Some(ref path) = att.saved_path {
+                let att_content = att.content_text.as_deref().unwrap_or("");
+                let att_tokens = match provider.count_tokens(
+                    &[crate::provider::Message::text("user", att_content)],
+                    None,
+                    false,
+                ).await {
+                    Ok(n) => n,
+                    Err(e) => {
+                        tracing::warn!(filename = %att.filename, error = %e,
+                            "count_tokens failed for attachment — defaulting to deep-read");
+                        usize::MAX
+                    }
                 };
-                let digest = crate::web::attachment_reader::deep_read(
-                    config, state.provider.as_ref(), &state.memory, None,
-                ).await;
-                deep_read_digests.push((att.filename.clone(), digest));
+                tracing::info!(
+                    filename = %att.filename, att_tokens, remaining_tokens,
+                    "Deep-read gate: attachment token cost measured"
+                );
+                if att_tokens > remaining_tokens {
+                    use crate::web::handlers::background_digest::{DigestStatus, spawn_background_deep_read};
+
+                    // Path A: Cache hit — full digest already computed. Inject immediately.
+                    if let Some(entry) = state.digest_store.get(path) {
+                        if let DigestStatus::Complete { ref digest } = *entry {
+                            tracing::info!(filename = %att.filename, "Deep-read gate: cache hit — using stored digest");
+                            deep_read_digests.push((att.filename.clone(), digest.clone()));
+                            continue;
+                        }
+                    }
+
+                    // Path B/C: Cache miss or pending — spawn background task if not already running.
+                    let is_pending = state.digest_store.get(path)
+                        .map(|e| matches!(*e, DigestStatus::Pending { .. }))
+                        .unwrap_or(false);
+
+                    if !is_pending {
+                        tracing::info!(filename = %att.filename, "Deep-read gate: spawning background deep-read");
+                        let bg_config = crate::web::attachment_reader::DeepReadConfig {
+                            path: path.clone(),
+                            filename: att.filename.clone(),
+                            context_length: state.model_spec.context_length,
+                        };
+                        spawn_background_deep_read(
+                            state.clone(), bg_config, path.clone(),
+                            msg.channel_id.clone(), msg.platform.clone(),
+                        );
+                    } else {
+                        tracing::info!(filename = %att.filename, "Deep-read gate: background read already in progress");
+                    }
+
+                    // Immediate reply: peek at the opening section within the real remaining budget.
+                    let peek = crate::web::attachment_reader::peek_read(
+                        path, &att.filename,
+                        state.config.general.peek_lines, remaining_tokens, provider,
+                    ).await;
+                    deep_read_digests.push((att.filename.clone(), peek));
+                }
             }
         }
     }
@@ -98,8 +170,6 @@ pub async fn platform_ingest(
         content
     };
 
-    // Select tools BEFORE building context so consolidation can account for tool overhead
-    let tools = select_tools(msg.is_admin);
     let tools_chars = tools.to_string().len();
 
     let ctx = crate::web::ws_context::build_chat_context(

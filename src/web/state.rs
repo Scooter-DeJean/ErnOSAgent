@@ -13,6 +13,7 @@ use crate::model::ModelSpec;
 use crate::provider::Provider;
 use crate::scheduler::store::JobStore;
 use crate::session::SessionManager;
+use crate::web::handlers::background_digest::DigestStore;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -65,4 +66,8 @@ pub struct AppState {
     /// Initialized at startup if [mesh] config is present, or at runtime
     /// when the user enables mesh via the WebUI toggle.
     pub mesh_runtime: Arc<RwLock<Option<ern_mesh::runtime::MeshRuntime>>>,
+    /// Background document digest cache — key: saved file path, value: Pending | Complete.
+    /// DashMap is lock-free; no RwLock wrapper required.
+    /// Populated by spawn_background_deep_read(); consumed by the deep-read gate.
+    pub digest_store: Arc<DigestStore>,
 }

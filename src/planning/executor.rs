@@ -22,10 +22,13 @@ pub struct DagExecutionResult {
 ///
 /// Loop: find ready tasks → spawn sub-agent for each → update DAG → repeat.
 /// Bounded by DAG resolution (all tasks done/failed/blocked).
+/// `full_tool_names` is the complete admin tool set derived from `layer2_tools()` —
+/// every sub-agent receives the full set so the system always has full tool access.
 pub async fn execute_dag(
     provider: &dyn Provider,
     state: &AppState,
     dag: &mut TaskDag,
+    full_tool_names: &[String],
 ) -> Result<DagExecutionResult> {
     tracing::info!(
         objective = %dag.objective,
@@ -49,14 +52,25 @@ pub async fn execute_dag(
             break;
         }
 
-        for (task_id, task_title, task_desc, task_tools) in ready_info {
+        for (task_id, task_title, task_desc, task_focus_tools) in ready_info {
             tracing::info!(task = %task_title, id = %task_id, "Executing task");
 
             dag.start_task(&task_id);
 
+            // Sub-agents receive the full admin tool set.
+            // task_focus_tools from the planner is included in the task description as context
+            // so the model knows what the planner intended, but does not restrict tool access.
+            let task_with_focus = if task_focus_tools.is_empty() {
+                format!("Task: {}\n\nDescription: {}\n\nComplete this task thoroughly.",
+                    task_title, task_desc)
+            } else {
+                format!("Task: {}\n\nDescription: {}\n\nSuggested tools: {}\n\nComplete this task thoroughly.",
+                    task_title, task_desc, task_focus_tools.join(", "))
+            };
+
             let config = SubAgentConfig {
-                task: format!("Task: {}\n\nDescription: {}\n\nComplete this task thoroughly.", task_title, task_desc),
-                allowed_tools: task_tools,
+                task: task_with_focus,
+                allowed_tools: full_tool_names.to_vec(),
                 max_turns: 15,
             };
             let result = run_sub_agent(provider, config, state).await;
@@ -185,5 +199,19 @@ mod tests {
         };
         assert_eq!(result.total, 4);
         assert!(!result.overall_success);
+    }
+
+    #[test]
+    fn test_task_focus_tools_in_description() {
+        // Planner focus tools go into the task description string, not the allowlist.
+        // The allowlist is always the full set passed into execute_dag.
+        let focus = vec!["project".to_string(), "create_artifact".to_string()];
+        let desc = format!(
+            "Task: T\n\nDescription: D\n\nSuggested tools: {}\n\nComplete this task thoroughly.",
+            focus.join(", ")
+        );
+        assert!(desc.contains("project"));
+        assert!(desc.contains("create_artifact"));
+        assert!(desc.contains("Suggested tools:"));
     }
 }

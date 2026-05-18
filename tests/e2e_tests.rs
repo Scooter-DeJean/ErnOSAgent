@@ -168,7 +168,7 @@ mod memory_manager_tests {
     fn test_recall_context_empty() {
         let tmp = TempDir::new().unwrap();
         let mm = MemoryManager::new(tmp.path()).unwrap();
-        let ctx = mm.recall_context("test", 1000, None);
+        let ctx = mm.recall_context("test", 1000, None, None);
         assert!(ctx.is_empty());
     }
 
@@ -177,7 +177,7 @@ mod memory_manager_tests {
         let tmp = TempDir::new().unwrap();
         let mut mm = MemoryManager::new(tmp.path()).unwrap();
         mm.scratchpad.pin("lang", "Rust").unwrap();
-        let ctx = mm.recall_context("test", 1000, None);
+        let ctx = mm.recall_context("test", 1000, None, None);
         assert!(ctx.contains("Rust"));
     }
 
@@ -186,7 +186,7 @@ mod memory_manager_tests {
         let tmp = TempDir::new().unwrap();
         let mut mm = MemoryManager::new(tmp.path()).unwrap();
         mm.lessons.add("Handle errors", "test", 0.95).unwrap();
-        let ctx = mm.recall_context("test", 1000, None);
+        let ctx = mm.recall_context("test", 1000, None, None);
         assert!(ctx.contains("Handle errors"));
     }
 
@@ -195,7 +195,7 @@ mod memory_manager_tests {
         let tmp = TempDir::new().unwrap();
         let mut mm = MemoryManager::new(tmp.path()).unwrap();
         mm.ingest_turn("user", "Hello world", "s1", None);
-        let ctx = mm.recall_context("test", 1000, None);
+        let ctx = mm.recall_context("test", 1000, None, None);
         assert!(ctx.contains("Hello world"));
     }
 
@@ -238,7 +238,7 @@ mod memory_manager_tests {
         mm.lessons.add("Use Rust", "test", 0.9).unwrap();
         mm.ingest_turn("user", "What?", "s1", None);
         mm.ingest_turn("assistant", "Ern-OS agent", "s1", None);
-        let ctx = mm.recall_context("Ern-OS", 5000, None);
+        let ctx = mm.recall_context("Ern-OS", 5000, None, None);
         assert!(ctx.contains("Ern-OS"));
         let status = mm.status_summary();
         assert!(status.contains("Scratchpad: 1"));
@@ -314,6 +314,7 @@ mod state_tests {
                 ern_os::learning::review::ReviewDeck::new(),
             )),
             mesh_runtime: Arc::new(RwLock::new(None)),
+            digest_store: ern_os::web::handlers::background_digest::new_digest_store(),
         }
     }
 
@@ -925,7 +926,7 @@ mod full_pipeline_e2e {
         let user_msg = "What is Rust?";
 
         // 2. Recall (empty)
-        let ctx = memory.recall_context(user_msg, 1000, None);
+        let ctx = memory.recall_context(user_msg, 1000, None, None);
         assert!(ctx.is_empty());
 
         // 3. Inference
@@ -949,7 +950,7 @@ mod full_pipeline_e2e {
         assert_eq!(memory.timeline.entry_count(), 2);
 
         // 6. Recall should now contain data
-        let ctx_after = memory.recall_context("Rust", 1000, None);
+        let ctx_after = memory.recall_context("Rust", 1000, None, None);
         assert!(!ctx_after.is_empty());
     }
 
@@ -986,7 +987,7 @@ mod full_pipeline_e2e {
             let mem = shared.clone();
             handles.push(tokio::spawn(async move {
                 let m = mem.read().await;
-                let ctx = m.recall_context("test", 100, None);
+                let ctx = m.recall_context("test", 100, None, None);
                 assert!(ctx.contains("shared"));
             }));
         }

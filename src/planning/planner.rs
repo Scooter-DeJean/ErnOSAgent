@@ -5,12 +5,15 @@ use crate::provider::{Message, Provider};
 use super::dag::{self, TaskDag, TaskNode};
 
 /// Decompose a high-level objective into a TaskDag using the model.
+/// `available_tools` is the full set of tool names the sub-agents may call.
+/// Derived from `layer2_tools()` at the call site — never hardcoded here.
 pub async fn decompose_objective(
     provider: &dyn Provider,
     objective: &str,
     project_context: &str,
+    available_tools: &[String],
 ) -> Result<TaskDag> {
-    let prompt = build_decomposition_prompt(objective, project_context);
+    let prompt = build_decomposition_prompt(objective, project_context, available_tools);
     let messages = vec![
         Message::text("system", &prompt),
         Message::text("user", &format!("Decompose this objective into tasks: {}", objective)),
@@ -54,25 +57,26 @@ pub async fn replan_task(
 }
 
 /// Build the decomposition system prompt.
-fn build_decomposition_prompt(objective: &str, context: &str) -> String {
+/// `available_tools` is derived from `layer2_tools()` at the call site — not hardcoded here.
+fn build_decomposition_prompt(objective: &str, context: &str, available_tools: &[String]) -> String {
     format!(
         "You are a task planner. Decompose the objective into concrete sub-tasks.\n\n\
          Output a JSON array of tasks. Each task has:\n\
          - \"id\": short kebab-case identifier\n\
          - \"title\": brief title\n\
          - \"description\": what to do (detailed instructions)\n\
-         - \"tools\": array of tool names needed\n\
+         - \"tools\": array of tool names needed (choose from Available tools below)\n\
          - \"depends_on\": array of task IDs this depends on\n\n\
-         Available tools: codebase_edit, codebase_create, codebase_search, \
-         file_read, run_bash_command, web_search, reply_request\n\n\
+         Available tools: {}\n\n\
          Project context:\n{}\n\n\
          Objective: {}\n\n\
          Output ONLY the JSON array, no markdown fences or explanation.",
-        context, objective
+        available_tools.join(", "), context, objective
     )
 }
 
 /// Build the replan prompt for a failed task.
+/// Does not need the tool list — the executor already holds the full allowlist.
 fn build_replan_prompt(failed: &TaskNode, error: &str, objective: &str) -> String {
     format!(
         "A task failed during execution of objective: {}\n\n\
@@ -167,11 +171,23 @@ mod tests {
     }
 
     #[test]
-    fn test_build_decomposition_prompt() {
-        let prompt = build_decomposition_prompt("Build blog", "Rust project");
+    fn test_build_decomposition_prompt_contains_provided_tools() {
+        let tools = vec!["project".to_string(), "create_artifact".to_string(), "file_read".to_string()];
+        let prompt = build_decomposition_prompt("Build blog", "Rust project", &tools);
         assert!(prompt.contains("Build blog"));
         assert!(prompt.contains("Rust project"));
-        assert!(prompt.contains("codebase_edit"));
+        assert!(prompt.contains("project"));
+        assert!(prompt.contains("create_artifact"));
+    }
+
+    #[test]
+    fn test_build_decomposition_prompt_no_hardcoded_tools() {
+        // If called with an empty list, no tool names should appear in the prompt
+        let tools: Vec<String> = vec![];
+        let prompt = build_decomposition_prompt("objective", "context", &tools);
+        assert!(!prompt.contains("codebase_edit"));
+        assert!(!prompt.contains("web_search"));
+        assert!(!prompt.contains("run_bash_command"));
     }
 
     #[test]

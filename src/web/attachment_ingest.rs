@@ -10,13 +10,7 @@
 
 use anyhow::Result;
 
-/// Compute the inline character budget from the model's context length.
-/// Allocates 25% of the context window for attachment text.
-/// Uses conservative token estimation (~3 chars/token for BPE tokenizers).
-pub fn inline_char_budget(context_length: usize) -> usize {
-    // 25% of context window, converted to chars at ~3 chars per token
-    (context_length / 4) * 3
-}
+
 
 /// A processed attachment ready for inference injection.
 pub struct ProcessedAttachment {
@@ -32,9 +26,11 @@ pub struct ProcessedAttachment {
 }
 
 impl ProcessedAttachment {
-    /// Whether this attachment exceeds the inline character budget.
-    pub fn exceeds_budget(&self, context_length: usize) -> bool {
-        self.original_size > inline_char_budget(context_length)
+    /// Whether this attachment exceeds the remaining token budget for this turn.
+    /// `remaining_tokens` is the real available budget: `context_length - measured_context_tokens`.
+    /// Measured by the caller via `provider.count_tokens()` — never estimated (§8.3, §2.1).
+    pub fn exceeds_token_budget(&self, remaining_tokens: usize) -> bool {
+        self.original_size > remaining_tokens
     }
 }
 
@@ -67,12 +63,11 @@ pub async fn process_attachments(
     results
 }
 
-/// Split processed attachments into images (for multimodal) and text content.
-/// `context_length` is the model's reported context window size (in tokens).
-pub fn split_processed(
-    attachments: &[ProcessedAttachment],
-    context_length: usize,
-) -> (Vec<String>, String) {
+/// Split processed attachments into images (for multimodal) and full text content.
+/// Pure formatter — no truncation, no budget arithmetic.
+/// Context enforcement is handled downstream by `enforce_context_budget()`,
+/// which uses `provider.count_tokens()` to measure real token usage (§2.1, §8.3).
+pub fn split_processed(attachments: &[ProcessedAttachment]) -> (Vec<String>, String) {
     let mut images = Vec::new();
     let mut text_parts = Vec::new();
 
@@ -81,9 +76,7 @@ pub fn split_processed(
             images.push(data_url.clone());
         }
         if let Some(ref text) = att.content_text {
-            let budget = inline_char_budget(context_length);
-            let budgeted = budget_text_content(text, &att.filename, budget);
-            text_parts.push(format!("### {} ###\n{}", att.filename, budgeted));
+            text_parts.push(format!("### {} ###\n{}", att.filename, text));
         }
     }
 
@@ -149,7 +142,7 @@ fn process_text_attachment(filename: String, ext: &str, bytes: &[u8], saved_path
     let original_size = content.len();
 
     // Admin path: save to disk AND inline the content.
-    // The budget_text_content() call in split_processed() handles truncation.
+    // Context enforcement is handled downstream by enforce_context_budget().
     let content_with_ref = match saved_path {
         Some(ref path) => format!(
             "[FILE SAVED: {} — full file at {}]\n\n{}",
@@ -274,42 +267,7 @@ fn base64_encode(data: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(data)
 }
 
-/// Apply content budgeting — truncate large text to fit within the context window.
-///
-/// For files exceeding the budget, includes the first portion with a clear
-/// pagination bookmark. The model can then use file_read to access the rest.
-fn budget_text_content(text: &str, filename: &str, budget: usize) -> String {
-    if text.len() <= budget {
-        return text.to_string();
-    }
 
-    let total_chars = text.len();
-    let total_lines = text.lines().count();
-
-    // Find a clean break point near the budget limit (at a line boundary)
-    let truncated = if let Some(break_pos) = text[..budget].rfind('\n') {
-        &text[..break_pos]
-    } else {
-        &text[..budget]
-    };
-
-    let shown_lines = truncated.lines().count();
-
-    tracing::info!(
-        filename = %filename,
-        total_chars,
-        total_lines,
-        shown_chars = truncated.len(),
-        shown_lines,
-        "Attachment truncated for context budget"
-    );
-
-    format!(
-        "[Lines 1-{} of {}]\n{}\n\n[BOOKMARK: line {} — use file_read on the saved file with start_line={} to continue]",
-        shown_lines, total_lines, truncated,
-        shown_lines + 1, shown_lines + 1,
-    )
-}
 
 #[cfg(test)]
 mod tests {
@@ -353,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_split_processed_empty() {
-        let (images, text) = split_processed(&[], 32768);
+        let (images, text) = split_processed(&[]);
         assert!(images.is_empty());
         assert!(text.is_empty());
     }
@@ -376,10 +334,27 @@ mod tests {
                 original_size: 7,
             },
         ];
-        let (images, text) = split_processed(&atts, 32768);
+        let (images, text) = split_processed(&atts);
         assert_eq!(images.len(), 1);
         assert!(text.contains("notes.md"));
         assert!(text.contains("# Hello"));
+    }
+
+    #[test]
+    fn test_split_processed_passes_full_content_without_truncation() {
+        // split_processed must NOT truncate — it is a pure formatter.
+        // Context enforcement is the caller's responsibility via count_tokens().
+        let long_content = "x".repeat(500_000);
+        let atts = vec![ProcessedAttachment {
+            filename: "large.md".into(),
+            content_text: Some(long_content.clone()),
+            image_data_url: None,
+            saved_path: None,
+            original_size: long_content.len(),
+        }];
+        let (_, text) = split_processed(&atts);
+        assert!(text.contains(&long_content[..100]), "Full content must be present");
+        assert!(!text.contains("BOOKMARK"), "split_processed must not truncate");
     }
 
     #[test]
@@ -390,46 +365,7 @@ mod tests {
         assert!(result.contains("Some content here."));
     }
 
-    #[test]
-    fn test_budget_small_file_passes_through() {
-        let budget = inline_char_budget(32768);
-        let text = "Small file content";
-        let result = budget_text_content(text, "small.md", budget);
-        assert_eq!(result, text);
-    }
 
-    #[test]
-    fn test_budget_large_file_truncated() {
-        let budget = inline_char_budget(32768);
-        let line = "This is a line of content for testing.\n";
-        let large = line.repeat(budget / line.len() + 100);
-        assert!(large.len() > budget);
-
-        let result = budget_text_content(&large, "huge.md", budget);
-        assert!(result.len() < large.len());
-        assert!(result.contains("[BOOKMARK"));
-        assert!(result.contains("start_line="));
-    }
-
-    #[test]
-    fn test_budget_preserves_line_boundaries() {
-        let budget = inline_char_budget(32768);
-        let line = "Line of text here\n";
-        let large = line.repeat(budget / line.len() + 100);
-        let result = budget_text_content(&large, "test.md", budget);
-        // The truncation should end at a newline, not mid-line
-        let before_bookmark = result.split("[BOOKMARK").next().unwrap().trim_end();
-        assert!(before_bookmark.ends_with("Line of text here"));
-    }
-
-    #[test]
-    fn test_inline_char_budget_scales_with_context() {
-        // A 32K context model should get a different budget than a 128K model
-        let small = inline_char_budget(8192);
-        let large = inline_char_budget(131072);
-        assert!(large > small);
-        assert!(small > 0);
-    }
 
     #[test]
     fn test_admin_attachment_inlines_content() {
@@ -454,24 +390,43 @@ mod tests {
     }
 
     #[test]
-    fn test_exceeds_budget_threshold() {
-        let small = ProcessedAttachment {
+    fn test_exceeds_token_budget_under_budget() {
+        // An attachment whose original_size fits within remaining_tokens must not trigger deep-read.
+        let att = ProcessedAttachment {
             filename: "small.md".into(),
             content_text: Some("hello".into()),
             image_data_url: None,
             saved_path: None,
             original_size: 100,
         };
-        assert!(!small.exceeds_budget(32768)); // 100 < budget
+        assert!(!att.exceeds_token_budget(1000));
+        assert!(!att.exceeds_token_budget(100)); // exact boundary: not strictly greater
+    }
 
-        let large = ProcessedAttachment {
+    #[test]
+    fn test_exceeds_token_budget_over_budget() {
+        // A 2MB attachment must trigger deep-read when remaining budget is small.
+        let att = ProcessedAttachment {
             filename: "big.md".into(),
             content_text: None,
             image_data_url: None,
             saved_path: Some("data/uploads/big.md".into()),
             original_size: 2_000_000,
         };
-        assert!(large.exceeds_budget(262144)); // 2MB > budget
-        assert!(large.exceeds_budget(32768));  // 2MB > smaller budget too
+        assert!(att.exceeds_token_budget(50_000));
+        assert!(att.exceeds_token_budget(0));
+    }
+
+    #[test]
+    fn test_exceeds_token_budget_zero_remaining() {
+        // When no budget remains, any non-zero attachment must exceed it.
+        let att = ProcessedAttachment {
+            filename: "any.md".into(),
+            content_text: Some("one line".into()),
+            image_data_url: None,
+            saved_path: None,
+            original_size: 1,
+        };
+        assert!(att.exceeds_token_budget(0));
     }
 }

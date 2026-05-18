@@ -33,7 +33,12 @@ pub async fn decompose(
     let provider = state.provider.as_ref();
     let project_context = format!("Ern-OS agent engine in {}", state.config.general.data_dir.display());
 
-    match crate::planning::planner::decompose_objective(provider, &objective, &project_context).await {
+    let tool_schema = crate::tools::schema::layer2_tools();
+    let tool_names: Vec<String> = tool_schema.as_array()
+        .map(|arr| arr.iter().filter_map(|t| t["function"]["name"].as_str().map(String::from)).collect())
+        .unwrap_or_default();
+
+    match crate::planning::planner::decompose_objective(provider, &objective, &project_context, &tool_names).await {
         Ok(dag) => {
             // Persist active DAG
             let data_dir = &state.config.general.data_dir;

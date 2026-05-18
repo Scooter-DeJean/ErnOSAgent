@@ -56,6 +56,8 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 
 # Utilities
 anyhow = "1"
+dashmap = "6"
+
 
 # Mesh network layer
 ern-mesh = { path = "ern-mesh" }

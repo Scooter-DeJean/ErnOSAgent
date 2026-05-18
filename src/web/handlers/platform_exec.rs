@@ -212,7 +212,9 @@ pub async fn run_platform_react(
     // cache so the first chat(true) below gets a near-full hit.
     let _ = provider.count_tokens(&messages, Some(&tools), true).await;
 
-    for turn in 0..50 {
+    let mut turn: usize = 0;
+    loop {
+        turn += 1;
         let rx = match provider.chat(&messages, Some(&tools), true).await {
             Ok(rx) => rx,
             Err(e) => return (format!("ReAct error: {}", e), tool_events, None),
@@ -279,8 +281,8 @@ pub async fn run_platform_react(
             _ => {}
         }
     }
-    ("ReAct loop reached maximum turns.".to_string(), tool_events, None)
 }
+
 
 /// Handle a tool call within the ReAct loop.
 /// Returns Some if the loop should exit, None to continue.
@@ -330,5 +332,31 @@ async fn handle_react_tool(
     tool_events.push(event);
     append_tool_messages(messages, tc, &result);
     enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, true).await;
+
+    // Exit if context is at or above 90% capacity — mirrors the L1 tool chain budget check.
+    // Uses provider.count_tokens() — no heuristics (§2.1, §8.3).
+    // Per §2.4: if count_tokens fails, skip this check (feature off, not degraded).
+    if let Ok(used_tokens) = provider.count_tokens(messages, Some(tools), true).await {
+        let budget_ratio = used_tokens as f64 / state.model_spec.context_length as f64;
+        if budget_ratio > 0.90 {
+            tracing::warn!(
+                turn,
+                used_tokens,
+                context_length = state.model_spec.context_length,
+                budget_ratio = format!("{:.1}%", budget_ratio * 100.0),
+                "ReAct loop: context at {:.0}% capacity — stopping",
+                budget_ratio * 100.0,
+            );
+            let reply = format!(
+                "Context is at {:.0}% capacity ({} tokens of {} used) after {} turns. \
+                 Task paused — please continue in a new message.",
+                budget_ratio * 100.0,
+                used_tokens,
+                state.model_spec.context_length,
+                turn,
+            );
+            return Some((reply, tool_events.clone(), None));
+        }
+    }
     None
 }

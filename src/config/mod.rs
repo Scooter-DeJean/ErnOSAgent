@@ -60,6 +60,19 @@ pub struct GeneralConfig {
     /// backends via llama.cpp RPC where layer transfer takes time.
     #[serde(default = "default_provider_health_check_retries")]
     pub provider_health_check_retries: u32,
+    /// Number of lines to include in the fast "peek" reply when a large
+    /// document is sent. The model reads this opening section immediately
+    /// and engages with its content while the full document is processed
+    /// in the background.
+    ///
+    /// `0` = use `file_read`'s natural first page (no end_line override).
+    /// Any positive value = read up to that line number only.
+    ///
+    /// Set in `ern-os.toml` under `[general]`:
+    ///   `peek_lines = 200`   # read first 200 lines for the fast reply
+    ///   `peek_lines = 0`     # use file_read natural page (default)
+    #[serde(default)]
+    pub peek_lines: usize,
 }
 
 fn default_provider_health_check_retries() -> u32 { 60 }
@@ -73,6 +86,7 @@ impl Default for GeneralConfig {
             flux_port: Some(8890),
             whisper_port: Some(8891),
             provider_health_check_retries: 60,
+            peek_lines: 0,
         }
     }
 }
@@ -397,6 +411,23 @@ mod tests {
         // pre-patch behavior.
         let config = AppConfig::default();
         assert_eq!(config.general.provider_health_check_retries, 60);
+    }
+
+    #[test]
+    fn test_peek_lines_defaults_to_zero() {
+        let config = AppConfig::default();
+        assert_eq!(config.general.peek_lines, 0);
+    }
+
+    #[test]
+    fn test_peek_lines_explicit_value_honored() {
+        let toml = r#"
+            active_provider = "llamacpp"
+            data_dir = "data"
+            peek_lines = 200
+        "#;
+        let general: GeneralConfig = toml::from_str(toml).unwrap();
+        assert_eq!(general.peek_lines, 200);
     }
 
     #[test]

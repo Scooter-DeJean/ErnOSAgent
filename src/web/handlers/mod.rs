@@ -14,6 +14,8 @@ pub mod codes;
 pub mod platforms;
 pub mod platform_ingest;
 pub mod platform_exec;
+pub mod background_digest;
+
 pub mod platform_context;
 pub mod platform_reinfer;
 pub mod voice;

@@ -159,19 +159,22 @@ pub async fn auto_stitch(
     context_length: usize,
 ) -> String {
     let total_budget = page_size_chars(context_length);
-    let max_continuations = 10;
     let mut stitched = initial_result.to_string();
+    let mut continuation: usize = 0;
 
-    for continuation in 0..max_continuations {
+    loop {
         let next_line = match parse_bookmark(&stitched) {
             Some(line) => line,
-            None => break, // No bookmark = we have all the content
+            None => {
+                tracing::info!(continuations = continuation, "Auto-stitch: EOF — no bookmark");
+                break;
+            }
         };
 
         // Budget check: stop if we've accumulated enough content
         if stitched.len() >= total_budget {
             tracing::info!(
-                len = stitched.len(), budget = total_budget,
+                len = stitched.len(), budget = total_budget, continuations = continuation,
                 "Auto-stitch: budget reached, stopping"
             );
             break;
@@ -198,6 +201,7 @@ pub async fn auto_stitch(
                 let current_content = strip_bookmark(&stitched);
                 let next_content = strip_page_header(&next_page);
                 stitched = format!("{}\n{}", current_content, next_content);
+                continuation += 1;
             }
             Err(e) => {
                 tracing::warn!(

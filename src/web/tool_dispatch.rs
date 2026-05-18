@@ -583,6 +583,7 @@ mod tests {
                 crate::learning::review::ReviewDeck::new(),
             )),
             mesh_runtime: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        digest_store: crate::web::handlers::background_digest::new_digest_store(),
         };
         let result = rt.block_on(execute_tool_with_state(&state, &tc));
         assert!(result.output.contains("Unknown tool"));

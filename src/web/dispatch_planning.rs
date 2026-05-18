@@ -55,15 +55,19 @@ async fn dispatch_plan_inner(
         anyhow::bail!("Missing 'objective' parameter");
     }
 
+    // Derive the full tool list from the authoritative registry.
+    // Sub-agents spawned by plan_and_execute have the same tool access as any admin inference.
+    let tool_names = layer2_tool_names();
+
     let provider = state.provider.as_ref();
     let dag = crate::planning::planner::decompose_objective(
-        provider, objective, context,
+        provider, objective, context, &tool_names,
     ).await?;
 
     let task_count = dag.nodes.len();
     let mut dag = dag;
     let result = crate::planning::executor::execute_dag(
-        provider, state, &mut dag,
+        provider, state, &mut dag, &tool_names,
     ).await?;
 
     Ok(format!(
@@ -75,10 +79,35 @@ async fn dispatch_plan_inner(
     ))
 }
 
+
+/// Extract tool names from `layer2_tools()` — the authoritative registry for admin tool access.
+/// Called at request time so the list always reflects the live schema.
+fn layer2_tool_names() -> Vec<String> {
+    let schema = crate::tools::schema::layer2_tools();
+    schema.as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|t| t["function"]["name"].as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn test_module_compiles() {
-        assert!(true);
+    fn test_layer2_tool_names_includes_project() {
+        let names = layer2_tool_names();
+        assert!(names.contains(&"project".to_string()), "layer2 must include project");
+        assert!(names.contains(&"create_artifact".to_string()), "layer2 must include create_artifact");
+        assert!(names.contains(&"memory".to_string()), "layer2 must include memory");
+    }
+
+    #[test]
+    fn test_layer2_tool_names_non_empty() {
+        let names = layer2_tool_names();
+        assert!(!names.is_empty());
     }
 }
