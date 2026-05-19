@@ -13,14 +13,21 @@
 //! DigestStore is a DashMap (lock-free, sharded) — no RwLock contention on reads.
 
 use dashmap::DashMap;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use crate::web::state::AppState;
 
 /// Status of a background deep-read operation.
 pub enum DigestStatus {
     /// Task is running. Stored so duplicate spawns are prevented.
-    Pending { started_at: std::time::Instant },
+    /// `pages_done` is ticked by the deep_read loop after each page completes.
+    Pending {
+        started_at: std::time::Instant,
+        pages_done: Arc<AtomicUsize>,
+    },
     /// Full deep-read complete. Digest is ready for context injection.
     /// `session_id` identifies which session produced this digest so the
     /// context builder can re-inject it on follow-up turns with no attachment.
@@ -58,16 +65,20 @@ pub fn spawn_background_deep_read(
     original_content: String,
 ) {
     // Mark pending before spawn to prevent duplicate tasks.
+    let pages_done = Arc::new(AtomicUsize::new(0));
     state.digest_store.insert(
         path_key.clone(),
-        DigestStatus::Pending { started_at: std::time::Instant::now() },
+        DigestStatus::Pending {
+            started_at: std::time::Instant::now(),
+            pages_done: Arc::clone(&pages_done),
+        },
     );
 
     let filename = config.filename.clone();
     tokio::spawn(async move {
         run_background_deep_read(
             state, config, path_key, filename, channel_id, platform,
-            session_id, original_content,
+            session_id, original_content, pages_done,
         ).await;
     });
 }
@@ -83,6 +94,7 @@ async fn run_background_deep_read(
     platform: String,
     session_id: String,
     original_content: String,
+    pages_done: Arc<AtomicUsize>,
 ) {
     tracing::info!(filename = %filename, path = %path_key, "Background deep-read: started");
 
@@ -91,6 +103,7 @@ async fn run_background_deep_read(
         state.provider.as_ref(),
         &state.memory,
         None, // no SSE tx in background tasks
+        Some(pages_done),
     ).await;
 
     // Store digest before generating response — durable even if inference fails (§2.4).
@@ -189,7 +202,7 @@ mod tests {
         let store = new_digest_store();
         store.insert(
             "data/uploads/book.md".to_string(),
-            DigestStatus::Pending { started_at: std::time::Instant::now() },
+            DigestStatus::Pending { started_at: std::time::Instant::now(), pages_done: Arc::new(AtomicUsize::new(0)) },
         );
         assert!(store.contains_key("data/uploads/book.md"));
         assert!(!store.contains_key("data/uploads/other.md"));
@@ -200,7 +213,7 @@ mod tests {
         let store = new_digest_store();
         let key = "data/uploads/book.md".to_string();
 
-        store.insert(key.clone(), DigestStatus::Pending { started_at: std::time::Instant::now() });
+        store.insert(key.clone(), DigestStatus::Pending { started_at: std::time::Instant::now(), pages_done: Arc::new(AtomicUsize::new(0)) });
         store.insert(key.clone(), DigestStatus::Complete {
             digest: "summary text".to_string(),
             session_id: "discord_user_chan".to_string(),
@@ -217,7 +230,7 @@ mod tests {
         let store = Arc::new(new_digest_store());
         let store2 = Arc::clone(&store);
 
-        store.insert("a".to_string(), DigestStatus::Pending { started_at: std::time::Instant::now() });
+        store.insert("a".to_string(), DigestStatus::Pending { started_at: std::time::Instant::now(), pages_done: Arc::new(AtomicUsize::new(0)) });
         store2.insert("b".to_string(), DigestStatus::Complete {
             digest: "d".to_string(),
             session_id: "s1".to_string(),

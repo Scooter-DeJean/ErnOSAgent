@@ -6,7 +6,10 @@
 
 use anyhow::Result;
 use std::convert::Infallible;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 use tokio::sync::{mpsc, RwLock};
 
 use crate::memory::MemoryManager;
@@ -31,11 +34,14 @@ struct PageSummary {
 
 /// Deep-read a saved file: paginate, summarise each page, store in scratchpad.
 /// Returns a combined digest for inline injection into the current context.
+/// `pages_done`: optional atomic counter ticked after each page — allows the
+/// introspect tool to report live progress without log scraping.
 pub async fn deep_read(
     config: DeepReadConfig,
     provider: &dyn Provider,
     memory: &Arc<RwLock<MemoryManager>>,
     tx: Option<&mpsc::Sender<Result<axum::response::sse::Event, Infallible>>>,
+    pages_done: Option<Arc<AtomicUsize>>,
 ) -> String {
     tracing::info!(
         path = %config.path, filename = %config.filename,
@@ -90,6 +96,11 @@ pub async fn deep_read(
 
         // Chunk and embed raw page content into document store for RAG retrieval
         ingest_page_chunks(memory, provider, &config.filename, page_num, &content).await;
+
+        // Tick live progress counter — read by introspect(action='digest_status')
+        if let Some(ref counter) = pages_done {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
 
         match next_line {
             Some(line) => start_line = line,

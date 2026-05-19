@@ -1,8 +1,10 @@
 //! Introspection tool — self-awareness layer for reasoning logs, activity, and system status.
 
+use crate::web::handlers::background_digest::DigestStatus;
 use crate::web::state::AppState;
 use anyhow::Result;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 
 /// Execute an introspect action.
 pub async fn execute(args: &serde_json::Value, state: &AppState) -> Result<String> {
@@ -13,6 +15,7 @@ pub async fn execute(args: &serde_json::Value, state: &AppState) -> Result<Strin
         "scheduler_status" => get_scheduler_status(state).await,
         "observer_audit" => get_observer_audit(&state.config.general.data_dir, args),
         "system_status" => get_system_status(state).await,
+        "digest_status" => get_digest_status(state),
         "my_tools" => list_available_tools(),
         other => Ok(format!("Unknown introspect action: {}", other)),
     }
@@ -175,6 +178,48 @@ async fn get_system_status(state: &AppState) -> Result<String> {
         model,
         if healthy { "✅ healthy" } else { "❌ unhealthy" },
         mem_summary.replace('\n', "\n    ")))
+}
+
+/// Report the live status of all background deep-read operations.
+/// Reads directly from the in-process DigestStore — no log scraping.
+/// This is the authoritative source for document processing progress.
+fn get_digest_status(state: &AppState) -> Result<String> {
+    let store = &state.digest_store;
+
+    if store.is_empty() {
+        return Ok("No background document reads active or completed this session.".to_string());
+    }
+
+    let mut lines = vec![format!("{} document(s) tracked:", store.len())];
+
+    for entry in store.iter() {
+        let path = entry.key();
+        let filename = std::path::Path::new(path)
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or(path);
+
+        match entry.value() {
+            DigestStatus::Pending { started_at, pages_done } => {
+                let elapsed = started_at.elapsed();
+                let done = pages_done.load(Ordering::Relaxed);
+                let secs = elapsed.as_secs();
+                let rate = if secs > 0 { done as f64 / secs as f64 } else { 0.0 };
+                lines.push(format!(
+                    "  ⏳ IN PROGRESS: {}\n     Pages done: {} | Elapsed: {}s | Rate: {:.2} pages/s",
+                    filename, done, secs, rate
+                ));
+            }
+            DigestStatus::Complete { session_id, .. } => {
+                lines.push(format!(
+                    "  ✅ COMPLETE: {} (session: {})",
+                    filename, session_id
+                ));
+            }
+        }
+    }
+
+    Ok(lines.join("\n"))
 }
 
 /// List all available tools.

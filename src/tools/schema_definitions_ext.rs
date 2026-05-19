@@ -28,11 +28,11 @@ pub fn introspect_tool_schema() -> serde_json::Value {
         "type": "function",
         "function": {
             "name": "introspect",
-            "description": "Access your own reasoning logs, agent activity, scheduler status, observer audits, and system health. Your self-awareness layer. Actions: 'reasoning_log', 'agent_activity', 'scheduler_status', 'observer_audit', 'system_status', 'my_tools'",
+            "description": "Access your own reasoning logs, agent activity, scheduler status, observer audits, and system health. Your self-awareness layer. Actions: 'reasoning_log', 'agent_activity', 'scheduler_status', 'observer_audit', 'system_status', 'digest_status', 'my_tools'",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": { "type": "string", "enum": ["reasoning_log", "agent_activity", "scheduler_status", "observer_audit", "system_status", "my_tools"], "description": "Introspection operation" },
+                    "action": { "type": "string", "enum": ["reasoning_log", "agent_activity", "scheduler_status", "observer_audit", "system_status", "digest_status", "my_tools"], "description": "Introspection operation" },
                     "limit": { "type": "integer", "description": "Max entries (for reasoning_log/agent_activity/observer_audit)" },
                     "session_id": { "type": "string", "description": "Session ID (for reasoning_log — defaults to current/most recent)" }
                 },
