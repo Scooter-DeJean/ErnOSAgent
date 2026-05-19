@@ -53,10 +53,10 @@ pub async fn maybe_start_embedding_server(config: &crate::config::AppConfig) {
                     return;
                 }
             }
-            tracing::warn!(pid, port, "Embedding server spawned but not healthy after 30s");
+            tracing::error!(pid, port, "Embedding server spawned but not healthy after 30s — RAG indexing will fail for all documents this session");
         }
         Err(e) => {
-            tracing::warn!(error = %e, port, "Failed to start embedding server — RAG disabled");
+            tracing::error!(error = %e, port, "Failed to start embedding server — RAG indexing will fail for all documents this session");
         }
     }
 }

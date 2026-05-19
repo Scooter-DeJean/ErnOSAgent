@@ -324,7 +324,8 @@ async fn emit_progress(
 }
 
 /// Chunk and embed a raw page into the document store for RAG retrieval.
-/// If embedding fails, logs a warning — the feature is off, not degraded (§2.4).
+/// If embedding fails, the failure is logged at ERROR — every failure is a
+/// data-loss event (the page is not indexed) and must be visible in the log.
 async fn ingest_page_chunks(
     memory: &Arc<RwLock<MemoryManager>>,
     provider: &dyn Provider,
@@ -341,7 +342,7 @@ async fn ingest_page_chunks(
         context_length,
     ).await {
         Ok(n) => tracing::info!(page, chunks = n, "Deep-read: page chunks embedded for RAG"),
-        Err(e) => tracing::warn!(page, error = %e, "Deep-read: chunk embedding failed — RAG disabled for this page"),
+        Err(e) => tracing::error!(page, error = %e, "Deep-read: chunk embedding failed — this page will not be indexed for RAG"),
     }
 }
 
