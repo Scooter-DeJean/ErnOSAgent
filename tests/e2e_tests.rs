@@ -76,6 +76,7 @@ impl Provider for MockProvider {
     async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
         Ok(self.embed_response.clone())
     }
+    async fn embed_context_length(&self) -> anyhow::Result<usize> { Ok(2048) }
 
     async fn count_tokens(&self, messages: &[Message], _tools: Option<&serde_json::Value>, _thinking: bool) -> anyhow::Result<usize> {
         Ok(messages.iter().map(|m| m.text_content().len() / 3).sum())
@@ -139,8 +140,9 @@ impl Provider for AuditAwareMockProvider {
     }
 
     async fn embed(&self, _text: &str) -> anyhow::Result<Vec<f32>> {
-        Ok(vec![0.1, 0.2, 0.3, 0.4])
+        Ok(vec![0.0; 768])
     }
+    async fn embed_context_length(&self) -> anyhow::Result<usize> { Ok(2048) }
 
     async fn count_tokens(&self, messages: &[Message], _tools: Option<&serde_json::Value>, _thinking: bool) -> anyhow::Result<usize> {
         Ok(messages.iter().map(|m| m.text_content().len() / 3).sum())

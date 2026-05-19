@@ -177,6 +177,12 @@ impl Provider for OllamaProvider {
             .collect())
     }
 
+    async fn embed_context_length(&self) -> Result<usize> {
+        // Ollama uses the same model for chat and embeddings.
+        // Re-use get_model_spec() which already derives context_length from the server.
+        Ok(self.get_model_spec().await?.context_length)
+    }
+
     async fn health(&self) -> bool {
         let url = format!("{}/api/tags", self.config.base_url);
         self.client.get(&url).send().await

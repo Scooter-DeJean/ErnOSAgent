@@ -49,15 +49,16 @@ impl DocumentStore {
     }
 
     /// Ingest document pages: split into chunks, embed each via provider.
+    /// Chunk size is derived from the embedding model's actual context window
+    /// as reported by `provider.embed_context_length()` (§2.1 — no hardcoded values).
     /// Returns the number of chunks stored.
     pub async fn ingest_document(
         &mut self,
         name: &str,
         pages: &[(usize, String)],
         provider: &dyn crate::provider::Provider,
-        context_length: usize,
     ) -> Result<usize> {
-        self.ingest_document_with_project(name, pages, provider, context_length, None).await
+        self.ingest_document_with_project(name, pages, provider, None).await
     }
 
     /// Ingest document pages scoped to a writing project.
@@ -66,10 +67,13 @@ impl DocumentStore {
         name: &str,
         pages: &[(usize, String)],
         provider: &dyn crate::provider::Provider,
-        context_length: usize,
         project_id: Option<&str>,
     ) -> Result<usize> {
-        let chunk_size = chunk_size_chars(context_length);
+        // Query the embedding model's actual context window — never use the
+        // chat model's context_length here (§2.1, §8.3).
+        let embed_ctx = provider.embed_context_length().await
+            .context("Failed to query embedding model context length")?;
+        let chunk_size = chunk_size_chars(embed_ctx);
         let mut count = 0;
 
         for (page, content) in pages {
@@ -93,7 +97,7 @@ impl DocumentStore {
         }
 
         self.persist()?;
-        tracing::info!(document = %name, chunks = count, "DocumentStore: ingested");
+        tracing::info!(document = %name, chunks = count, embed_ctx, "DocumentStore: ingested");
         Ok(count)
     }
 
@@ -179,10 +183,12 @@ fn chunk_page(content: &str, chunk_size: usize) -> Vec<String> {
     chunks
 }
 
-/// Chunk size = context_length / 128 * 4 chars (derived from model, §2.1).
-/// For a 262K context: (262144 / 128) * 4 = 8192 chars per chunk.
-fn chunk_size_chars(context_length: usize) -> usize {
-    (context_length / 128) * 4
+/// Chunk size derived from the embedding model's reported context window (§2.1).
+/// Uses 80% of the embedding model's n_ctx_train to leave headroom for special tokens.
+/// Converts tokens to chars using 4 chars/token (conservative estimate for BPE).
+fn chunk_size_chars(embed_context_length: usize) -> usize {
+    // 80% of context window, converted to chars
+    (embed_context_length * 4 * 4) / 5
 }
 
 #[cfg(test)]
@@ -216,8 +222,14 @@ mod tests {
     }
 
     #[test]
-    fn test_chunk_size_262k() {
-        assert_eq!(chunk_size_chars(262144), 8192);
+    fn test_chunk_size_nomic_2048() {
+        // nomic-embed-text n_ctx_train = 2048
+        // Expected: (2048 * 4 * 4) / 5 = 6553 chars
+        // This must be < 2048 * 4 = 8192 chars (nomic's max input in chars)
+        // so chunks never exceed the embedding model's context window
+        let size = chunk_size_chars(2048);
+        assert_eq!(size, 6553);
+        assert!(size < 2048 * 4, "chunk must fit within embedding model context");
     }
 
     #[test]

@@ -89,7 +89,7 @@ pub async fn deep_read(
         }
 
         // Chunk and embed raw page content into document store for RAG retrieval
-        ingest_page_chunks(memory, provider, &config.filename, page_num, &content, config.context_length).await;
+        ingest_page_chunks(memory, provider, &config.filename, page_num, &content).await;
 
         match next_line {
             Some(line) => start_line = line,
@@ -332,14 +332,12 @@ async fn ingest_page_chunks(
     filename: &str,
     page: usize,
     content: &str,
-    context_length: usize,
 ) {
     let mut mem = memory.write().await;
     match mem.documents.ingest_document(
         filename,
         &[(page, content.to_string())],
         provider,
-        context_length,
     ).await {
         Ok(n) => tracing::info!(page, chunks = n, "Deep-read: page chunks embedded for RAG"),
         Err(e) => tracing::error!(page, error = %e, "Deep-read: chunk embedding failed — this page will not be indexed for RAG"),

@@ -375,6 +375,21 @@ impl Provider for LlamaCppProvider {
         Ok(embedding)
     }
 
+    async fn embed_context_length(&self) -> Result<usize> {
+        let url = format!(
+            "http://localhost:{}/v1/models",
+            self.config.embedding_port
+        );
+        let response = self.client.get(&url).send().await
+            .context("Failed to connect to embedding server for context length query")?;
+        let result: serde_json::Value = response.json().await
+            .context("Failed to parse embedding server model info")?;
+        result["data"][0]["meta"]["n_ctx_train"]
+            .as_u64()
+            .map(|n| n as usize)
+            .context("Embedding server did not report n_ctx_train")
+    }
+
     async fn health(&self) -> bool {
         let url = format!("{}/health", self.base_url);
         self.client

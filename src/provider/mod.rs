@@ -261,6 +261,13 @@ pub trait Provider: Send + Sync {
     /// Generate embeddings for the given text.
     async fn embed(&self, text: &str) -> Result<Vec<f32>>;
 
+    /// Return the context length of the embedding model as reported by the backend.
+    /// Used to correctly size document chunks before calling `embed()`.
+    /// MUST query the actual embedding server — no hardcoded values (§2.1).
+    /// Implementations that do not have a separate embedding server may return
+    /// the same value as the main model's context_length.
+    async fn embed_context_length(&self) -> Result<usize>;
+
     /// Health check — returns true if the backend is reachable.
     async fn health(&self) -> bool;
 
