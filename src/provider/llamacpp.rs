@@ -16,6 +16,10 @@ pub struct LlamaCppProvider {
     config: LlamaCppConfig,
     client: reqwest::Client,
     base_url: String,
+    /// KV cache slot affinity. `None` uses the server default (slot 0).
+    /// Set to `Some(1)` for the observer so it maintains its own
+    /// independent prefix cache, separate from the main inference slot.
+    slot_affinity: Option<u32>,
 }
 
 impl LlamaCppProvider {
@@ -24,6 +28,19 @@ impl LlamaCppProvider {
             config: config.clone(),
             client: reqwest::Client::new(),
             base_url: format!("http://localhost:{}", config.port),
+            slot_affinity: None,
+        }
+    }
+
+    /// Create a provider instance pinned to a specific llama-server KV cache slot.
+    /// Only meaningful when the server is started with `-np 2` or higher.
+    /// Used to give the observer its own independent KV cache accumulation.
+    pub fn new_with_slot(config: &LlamaCppConfig, slot: u32) -> Self {
+        Self {
+            config: config.clone(),
+            client: reqwest::Client::new(),
+            base_url: format!("http://localhost:{}", config.port),
+            slot_affinity: Some(slot),
         }
     }
 
@@ -38,7 +55,7 @@ impl LlamaCppProvider {
             "-c".to_string(),
             "0".to_string(), // Auto-detect context from GGUF
             "-np".to_string(),
-            "1".to_string(), // Single slot — full native context from GGUF (-c 0 auto-detects)
+            "2".to_string(), // Slot 0: main inference. Slot 1: observer audit (dedicated KV cache).
             "-ngl".to_string(),
             self.config.n_gpu_layers.to_string(),
         ];
@@ -78,6 +95,14 @@ impl LlamaCppProvider {
 
         // Thinking mode control — passed to the model's Jinja template via chat_template_kwargs
         body["chat_template_kwargs"] = serde_json::json!({"enable_thinking": thinking});
+
+        // Pin request to a specific KV cache slot when affinity is set.
+        // Only has effect with -np 2+ on the server. The observer uses slot 1
+        // to maintain an independent prefix cache that grows with the session,
+        // eliminating cold-start recomputation on every audit turn.
+        if let Some(slot) = self.slot_affinity {
+            body["id_slot"] = serde_json::json!(slot);
+        }
 
         body
     }
@@ -514,5 +539,38 @@ mod tests {
             assert!(msg.contains("connection closed") || msg.contains("connection reset"),
                 "Error classification must match: {}", msg);
         }
+    }
+
+    #[test]
+    fn test_build_chat_body_no_slot_by_default() {
+        let config = LlamaCppConfig::default();
+        let provider = LlamaCppProvider::new(&config);
+        let body = provider.build_chat_body(&[], None, false, false);
+        assert!(body.get("id_slot").is_none(), "Default provider must not pin to any slot");
+    }
+
+    #[test]
+    fn test_build_chat_body_includes_slot_when_set() {
+        let config = LlamaCppConfig::default();
+        let provider = LlamaCppProvider::new_with_slot(&config, 1);
+        let body = provider.build_chat_body(&[], None, false, false);
+        assert_eq!(
+            body["id_slot"],
+            serde_json::json!(1),
+            "Audit provider must pin to slot 1"
+        );
+    }
+
+    #[test]
+    fn test_build_server_args_uses_two_slots() {
+        let config = LlamaCppConfig::default();
+        let provider = LlamaCppProvider::new(&config);
+        let args = provider.build_server_args();
+        let np_pos = args.iter().position(|a| a == "-np")
+            .expect("-np must be present in server args");
+        assert_eq!(
+            args[np_pos + 1], "2",
+            "-np must be 2 to give the observer its own KV cache slot"
+        );
     }
 }

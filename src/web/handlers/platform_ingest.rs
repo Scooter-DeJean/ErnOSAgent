@@ -430,7 +430,7 @@ pub async fn audit_and_capture(
     // which is a deeper bug to fix — not mask with a bailout.
     loop {
         match crate::observer::audit_response(
-            provider, messages, &current_text, &tool_context, user_query,
+            state.audit_provider.as_ref(), messages, &current_text, &tool_context, user_query,
         ).await {
             Ok(output) if output.result.verdict.is_allowed() => {
                 crate::observer::persist_audit_result(&state.config.general.data_dir, &output.result);

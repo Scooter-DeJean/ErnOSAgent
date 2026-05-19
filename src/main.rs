@@ -31,8 +31,12 @@ async fn main() -> Result<()> {
 
     let _server_handle = maybe_start_llama_server(&config).await?;
     let provider = create_and_verify_provider(&config).await?;
+    let audit_provider: Arc<dyn ern_os::provider::Provider> = Arc::from(
+        ern_os::provider::create_audit_provider(&config)
+            .context("Failed to create audit provider")?,
+    );
     let model_spec = detect_model_spec(&provider).await?;
-    let state = build_app_state(&config, provider, model_spec)?;
+    let state = build_app_state(&config, provider, audit_provider, model_spec)?;;
 
     let _scheduler = ern_os::scheduler::start(state.clone());
 
@@ -309,6 +313,7 @@ async fn detect_model_spec(
 fn build_app_state(
     config: &ern_os::config::AppConfig,
     provider: Arc<dyn ern_os::provider::Provider>,
+    audit_provider: Arc<dyn ern_os::provider::Provider>,
     model_spec: ern_os::model::ModelSpec,
 ) -> Result<ern_os::web::state::AppState> {
     let data_dir = config.general.data_dir.clone();
@@ -388,6 +393,7 @@ fn build_app_state(
                 .context("Failed to initialise session manager")?,
         )),
         provider,
+        audit_provider,
         golden_buffer: Arc::new(RwLock::new(golden_buffer)),
         rejection_buffer: Arc::new(RwLock::new(rejection_buffer)),
         scheduler: Arc::new(RwLock::new(scheduler)),

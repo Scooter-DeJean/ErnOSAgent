@@ -20,6 +20,9 @@ fn build_test_state(tmp: &std::path::Path) -> AppState {
         provider: std::sync::Arc::new(crate::provider::llamacpp::LlamaCppProvider::new(
             &crate::config::LlamaCppConfig::default(),
         )),
+        audit_provider: std::sync::Arc::new(crate::provider::llamacpp::LlamaCppProvider::new_with_slot(
+            &crate::config::LlamaCppConfig::default(), 1,
+        )),
         golden_buffer: std::sync::Arc::new(tokio::sync::RwLock::new(
             crate::learning::buffers::GoldenBuffer::new(500),
         )),

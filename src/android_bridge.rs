@@ -70,6 +70,14 @@ pub extern "C" fn Java_com_ernos_app_EngineService_startEngine(
             None => return,
         };
 
+        let audit_provider = match crate::provider::create_audit_provider(&config) {
+            Ok(p) => std::sync::Arc::from(p),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to create audit provider on Android");
+                return;
+            }
+        };
+
         // Wait for provider health before querying model spec (auto-derived, per governance §2.1/§5)
         tracing::info!("Waiting for provider health before querying model spec...");
         let mut retries = 0;
@@ -99,7 +107,7 @@ pub extern "C" fn Java_com_ernos_app_EngineService_startEngine(
             }
         };
 
-        let state = match build_app_state(&config, provider.clone(), model_spec) {
+        let state = match build_app_state(&config, provider.clone(), audit_provider, model_spec) {
             Some(s) => s,
             None => return,
         };
@@ -175,6 +183,7 @@ fn create_provider_no_wait(
 fn build_app_state(
     config: &crate::config::AppConfig,
     provider: std::sync::Arc<dyn crate::provider::Provider>,
+    audit_provider: std::sync::Arc<dyn crate::provider::Provider>,
     model_spec: crate::model::ModelSpec,
 ) -> Option<crate::web::state::AppState> {
     let data_dir = &config.general.data_dir;
@@ -206,6 +215,7 @@ fn build_app_state(
         memory: std::sync::Arc::new(tokio::sync::RwLock::new(memory)),
         sessions: std::sync::Arc::new(tokio::sync::RwLock::new(sessions)),
         provider,
+        audit_provider,
         golden_buffer: std::sync::Arc::new(tokio::sync::RwLock::new(
             crate::learning::buffers::GoldenBuffer::new(500)
         )),
@@ -254,5 +264,6 @@ fn build_app_state(
             crate::learning::review::ReviewDeck::new(),
         )),
         mesh_runtime: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
+        digest_store: crate::web::handlers::background_digest::new_digest_store(),
     })
 }

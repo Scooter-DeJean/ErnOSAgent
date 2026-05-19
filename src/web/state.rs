@@ -32,6 +32,10 @@ pub struct AppState {
     pub memory: Arc<RwLock<MemoryManager>>,
     pub sessions: Arc<RwLock<SessionManager>>,
     pub provider: Arc<dyn Provider>,
+    /// Observer-dedicated provider — pinned to llama-server slot 1 for llamacpp.
+    /// Gives the observer its own independent KV cache, eliminating cold-start
+    /// recomputation on every audit turn as the session grows.
+    pub audit_provider: Arc<dyn Provider>,
     pub golden_buffer: Arc<RwLock<GoldenBuffer>>,
     pub rejection_buffer: Arc<RwLock<RejectionBuffer>>,
     pub scheduler: Arc<RwLock<JobStore>>,

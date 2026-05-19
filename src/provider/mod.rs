@@ -287,6 +287,25 @@ pub fn create_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
     }
 }
 
+/// Create the audit provider used exclusively by the observer.
+///
+/// For llamacpp, this returns a provider pinned to slot 1, giving the observer
+/// its own independent KV cache accumulation separate from the main inference
+/// slot (slot 0). The server must be started with `-np 2` for this to have
+/// effect — which `build_server_args` ensures.
+///
+/// For all other providers, slot affinity is not a supported concept, so the
+/// audit provider is identical to the main provider. The observer will share
+/// the same connection path and derive no KV cache benefit, but will function
+/// correctly.
+pub fn create_audit_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
+    if config.general.active_provider == "llamacpp" {
+        Ok(Box::new(llamacpp::LlamaCppProvider::new_with_slot(&config.llamacpp, 1)))
+    } else {
+        create_provider(config)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
