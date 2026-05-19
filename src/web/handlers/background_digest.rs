@@ -100,7 +100,7 @@ async fn run_background_deep_read(
 
     let digest = crate::web::attachment_reader::deep_read(
         config,
-        state.provider.as_ref(),
+        state.audit_provider.as_ref(), // slot 1 — same pattern as observer, keeps slot 0 KV cache intact
         &state.memory,
         None, // no SSE tx in background tasks
         Some(pages_done),
