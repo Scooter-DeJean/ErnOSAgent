@@ -50,7 +50,7 @@ pub(crate) async fn reinfer_and_dispatch(
         }
         ConsumeResult::Reply { text, .. } => {
             let (audited, audit) = audit_and_capture(
-                state, provider, messages, tools, user_query, &text, None, session_id,
+                state, provider, messages, tools, user_query, &text, session_id,
             ).await;
             LoopAction::Reply(audited, audit)
         }
@@ -98,7 +98,7 @@ async fn handle_spiral(
     match recovered {
         ConsumeResult::Reply { text, .. } => {
             let (audited, audit) = audit_and_capture(
-                state, provider, messages, tools, user_query, &text, None, session_id,
+                state, provider, messages, tools, user_query, &text, session_id,
             ).await;
             LoopAction::Reply(audited, audit)
         }
@@ -139,7 +139,7 @@ async fn handle_stall(
     match stream_consumer::consume_stream(retry_rx, &mut retry_sink).await {
         ConsumeResult::Reply { text, .. } if !text.trim().is_empty() => {
             let (audited, audit) = audit_and_capture(
-                state, provider, messages, tools, user_query, &text, None, session_id,
+                state, provider, messages, tools, user_query, &text, session_id,
             ).await;
             LoopAction::Reply(audited, audit)
         }
@@ -186,7 +186,7 @@ async fn handle_empty_response(
     match stream_consumer::consume_stream(retry_rx, &mut retry_sink).await {
         ConsumeResult::Reply { text, .. } if !text.trim().is_empty() => {
             let (audited, audit) = audit_and_capture(
-                state, provider, messages, tools, user_query, &text, None, session_id,
+                state, provider, messages, tools, user_query, &text, session_id,
             ).await;
             LoopAction::Reply(audited, audit)
         }
