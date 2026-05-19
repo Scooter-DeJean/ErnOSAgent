@@ -23,8 +23,22 @@ pub async fn maybe_start_embedding_server(config: &crate::config::AppConfig) {
         return;
     }
 
-    let model = llama_config.embedding_model.as_deref()
-        .unwrap_or(&llama_config.model_path);
+    // §5: If the provider doesn't report a value, the system reports the gap — it does NOT
+    // invent a default. embedding_model is a distinct, required field. Falling back to the
+    // main model is wrong: the main model is a chat model, not an embedding model, and it
+    // is already loaded on the main port — spawning it again would OOM or fail silently.
+    let model = match llama_config.embedding_model.as_deref() {
+        Some(m) => m,
+        None => {
+            tracing::error!(
+                port,
+                "Embedding server not started: 'embedding_model' is not set in [llamacpp] config. \
+                 Add 'embedding_model = \"models/nomic-embed-text-v1.5.Q8_0.gguf\"' (or equivalent) \
+                 to ern-os.toml. RAG indexing is disabled until this is configured."
+            );
+            return;
+        }
+    };
 
     tracing::info!(port, model, "Starting embedding server");
 
