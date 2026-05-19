@@ -39,6 +39,7 @@ impl Provider for MockProvider {
         Ok(ModelSpec {
             name: "mock-model-v1".into(),
             context_length: 8192,
+            page_budget_tokens: 0,
             supports_vision: false,
             supports_video: false,
             supports_audio: false,
@@ -109,6 +110,7 @@ impl Provider for AuditAwareMockProvider {
         Ok(ModelSpec {
             name: "mock-model-v1".into(),
             context_length: 8192,
+            page_budget_tokens: 0,
             supports_vision: false,
             supports_video: false,
             supports_audio: false,
@@ -1087,6 +1089,7 @@ mod webui_e2e {
         let spec = ModelSpec {
             name: "test".into(),
             context_length: 128000,
+            page_budget_tokens: 0,
             supports_vision: true,
             supports_video: true,
             supports_audio: false,

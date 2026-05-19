@@ -13,6 +13,10 @@ pub struct ModelSpec {
     pub name: String,
     /// Maximum context window in tokens — auto-derived from provider, never hardcoded
     pub context_length: usize,
+    /// Tokens available for raw page content in background document summarisation.
+    /// = context_length - summarisation_system_prompt_overhead.
+    /// Measured once at startup via count_tokens(); never re-measured per turn.
+    pub page_budget_tokens: usize,
     /// Whether the model supports vision (images)
     pub supports_vision: bool,
     /// Whether the model supports video (frame sequences)
@@ -49,6 +53,7 @@ impl Default for ModelSpec {
         Self {
             name: "unknown".to_string(),
             context_length: 0, // Must be set by provider — 0 signals "not yet derived"
+            page_budget_tokens: 0, // Measured at startup via count_tokens()
             supports_vision: false,
             supports_video: false,
             supports_audio: false,

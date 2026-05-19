@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         ern_os::provider::create_audit_provider(&config)
             .context("Failed to create audit provider")?,
     );
-    let model_spec = detect_model_spec(&provider).await?;
+    let model_spec = detect_model_spec(&provider, &audit_provider).await?;
     let state = build_app_state(&config, provider, audit_provider, model_spec)?;
 
     let _scheduler = ern_os::scheduler::start(state.clone());
@@ -297,15 +297,24 @@ async fn create_and_verify_provider(
 }
 
 /// Detect model specification from the active provider.
+/// Also measures the document summarisation page budget once via count_tokens()
+/// so it is available in ModelSpec without re-measurement during live inference.
 async fn detect_model_spec(
     provider: &Arc<dyn ern_os::provider::Provider>,
+    audit_provider: &Arc<dyn ern_os::provider::Provider>,
 ) -> Result<ern_os::model::ModelSpec> {
-    let spec = provider.get_model_spec().await
+    let mut spec = provider.get_model_spec().await
         .context("Failed to get model spec from provider")?;
     tracing::info!(
         model = %spec.name, context_length = spec.context_length,
         vision = spec.supports_vision, "Model detected"
     );
+    // Measure page budget once at startup on the audit slot (slot 1), which is
+    // idle at this point. Stored in ModelSpec so deep_read() never re-measures
+    // during live inference (which would cause GPU contention on slot 0).
+    spec.page_budget_tokens = ern_os::web::attachment_reader::measure_page_budget(
+        audit_provider.as_ref(), spec.context_length,
+    ).await;
     Ok(spec)
 }
 

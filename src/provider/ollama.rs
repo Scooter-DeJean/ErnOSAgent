@@ -63,8 +63,9 @@ impl Provider for OllamaProvider {
         Ok(ModelSpec {
             name: self.config.model.clone(),
             context_length,
+            page_budget_tokens: 0, // Set by detect_model_spec() after startup measurement
             supports_vision: has_vision,
-            supports_video: has_vision, // Vision models support video as frames
+            supports_video: has_vision,
             supports_audio: false,
             supports_tool_calling: true,
             supports_thinking: true,

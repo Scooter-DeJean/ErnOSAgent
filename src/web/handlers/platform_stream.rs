@@ -148,7 +148,7 @@ async fn run_streaming_pipeline(
                         let bg_config = crate::web::attachment_reader::DeepReadConfig {
                             path: path.clone(),
                             filename: att.filename.clone(),
-                            context_length: state.model_spec.context_length,
+                            page_budget_tokens: state.model_spec.page_budget_tokens,
                         };
                         spawn_background_deep_read(
                             state.clone(), bg_config, path.clone(),

@@ -19,7 +19,9 @@ use crate::provider::Provider;
 pub struct DeepReadConfig {
     pub path: String,
     pub filename: String,
-    pub context_length: usize,
+    /// Tokens available for page content — measured once at startup, passed in from ModelSpec.
+    /// Never re-measured per deep_read call (would cause GPU contention with live inference).
+    pub page_budget_tokens: usize,
 }
 
 /// A single summarised page, with the line range it covers in the source file.
@@ -43,13 +45,13 @@ pub async fn deep_read(
     tx: Option<&mpsc::Sender<Result<axum::response::sse::Event, Infallible>>>,
     pages_done: Option<Arc<AtomicUsize>>,
 ) -> String {
-    // Measure the summarisation system prompt overhead once.
-    // page_budget_tokens is what remains for raw page content.
-    // This replaces the heuristic context_length/8 divisor (§8.3, §2.1).
-    let page_budget_tokens = measure_page_budget(provider, config.context_length).await;
+    // page_budget_tokens is pre-measured at startup and stored in ModelSpec.
+    // It must NOT be re-measured here — that would fire a count_tokens call
+    // on the audit provider slot concurrently with live main-slot inference,
+    // causing GPU contention and extended turn latency.
+    let page_budget_tokens = config.page_budget_tokens;
     tracing::info!(
         path = %config.path, filename = %config.filename,
-        context_length = config.context_length,
         page_budget_tokens,
         "Deep-read: starting page-by-page summarisation"
     );

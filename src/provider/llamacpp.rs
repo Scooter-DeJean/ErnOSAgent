@@ -179,6 +179,7 @@ impl Provider for LlamaCppProvider {
         Ok(ModelSpec {
             name,
             context_length,
+            page_budget_tokens: 0, // Set by detect_model_spec() after startup measurement
             supports_vision,
             supports_video,
             supports_audio,
