@@ -305,12 +305,17 @@ pub fn create_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
 /// audit provider is identical to the main provider. The observer will share
 /// the same connection path and derive no KV cache benefit, but will function
 /// correctly.
+/// Create the observer (audit) provider.
+///
+/// Uses the DEFAULT slot (slot 0) — same as main inference.
+/// The observer sends the identical conversation prefix (1-to-1 context parity),
+/// so llama-server reuses the hot KV cache from the just-completed main inference.
+/// Only the delta (candidate + audit prompt) is computed — fast.
+///
+/// Slot 1 (previous approach) was wrong: slot 1 never had the prefix cached,
+/// causing a full cold-start recompute (~23K tokens = ~142s) on every turn.
 pub fn create_audit_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
-    if config.general.active_provider == "llamacpp" {
-        Ok(Box::new(llamacpp::LlamaCppProvider::new_with_slot(&config.llamacpp, 1)))
-    } else {
-        create_provider(config)
-    }
+    create_provider(config)
 }
 
 #[cfg(test)]
