@@ -55,7 +55,7 @@ impl LlamaCppProvider {
             "-c".to_string(),
             "0".to_string(), // Auto-detect context from GGUF
             "-np".to_string(),
-            "2".to_string(), // Slot 0: main inference. Slot 1: observer audit (dedicated KV cache).
+            "3".to_string(), // Slot 0: main inference. Slot 1: observer audit. Slot 2: background document digest.
             "-ngl".to_string(),
             self.config.n_gpu_layers.to_string(),
         ];
@@ -577,15 +577,15 @@ mod tests {
     }
 
     #[test]
-    fn test_build_server_args_uses_two_slots() {
+    fn test_build_server_args_uses_three_slots() {
         let config = LlamaCppConfig::default();
         let provider = LlamaCppProvider::new(&config);
         let args = provider.build_server_args();
         let np_pos = args.iter().position(|a| a == "-np")
             .expect("-np must be present in server args");
         assert_eq!(
-            args[np_pos + 1], "2",
-            "-np must be 2 to give the observer its own KV cache slot"
+            args[np_pos + 1], "3",
+            "-np must be 3: slot 0 main inference, slot 1 observer audit, slot 2 document digest"
         );
     }
 }

@@ -539,6 +539,9 @@ mod tests {
             audit_provider: std::sync::Arc::new(crate::provider::llamacpp::LlamaCppProvider::new_with_slot(
                 &crate::config::LlamaCppConfig::default(), 1
             )),
+            digest_provider: std::sync::Arc::new(crate::provider::llamacpp::LlamaCppProvider::new_with_slot(
+                &crate::config::LlamaCppConfig::default(), 2
+            )),
             golden_buffer: std::sync::Arc::new(tokio::sync::RwLock::new(
                 crate::learning::buffers::GoldenBuffer::new(500)
             )),
