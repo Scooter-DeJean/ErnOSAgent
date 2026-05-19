@@ -15,7 +15,7 @@
 use dashmap::DashMap;
 use std::sync::{
     Arc,
-    atomic::{AtomicUsize, Ordering},
+    atomic::AtomicUsize,
 };
 
 use crate::web::state::AppState;
