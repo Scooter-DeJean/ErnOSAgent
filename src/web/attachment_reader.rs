@@ -127,7 +127,7 @@ pub async fn peek_read(
     peek_lines: usize,
     token_budget: usize,
     provider: &dyn Provider,
-) -> String {
+) -> (String, Option<usize>) {
     tracing::info!(
         path = %path, filename = %filename, peek_lines, token_budget,
         "Peek-read: reading opening section for immediate reply"
@@ -136,13 +136,16 @@ pub async fn peek_read(
     // peek_lines = 0 → use token_budget as page size (file_read's natural pagination).
     // peek_lines > 0 → owner-configured line count.
     let page_size = if peek_lines == 0 { token_budget } else { peek_lines };
-    let (content, _next) = read_page(path, 1, page_size).await;
+    let (content, next_line) = read_page(path, 1, page_size).await;
 
     if content.trim().is_empty() {
-        return format!(
-            "[`{}` appears to be empty or could not be read. \
-             Full document is being processed in the background.]",
-            filename
+        return (
+            format!(
+                "[`{}` appears to be empty or could not be read. \
+                 Full document is being processed in the background.]",
+                filename
+            ),
+            None,
         );
     }
 
@@ -162,17 +165,23 @@ pub async fn peek_read(
     };
 
     if fits {
-        format!(
-            "{}\n\n[Opening section of `{}` shown — full document is being read in the background. \
-             I will notify you when the complete analysis is ready.]",
-            content, filename
+        (
+            format!(
+                "{}\n\n[Opening section of `{}` shown — full document is being read in the background. \
+                 I will notify you when the complete analysis is ready.]",
+                content, filename
+            ),
+            next_line,
         )
     } else {
-        format!(
-            "[`{}` opening section exceeds available context. \
-             Full document is being read in the background. \
-             I will notify you when the complete analysis is ready.]",
-            filename
+        (
+            format!(
+                "[`{}` opening section exceeds available context. \
+                 Full document is being read in the background. \
+                 I will notify you when the complete analysis is ready.]",
+                filename
+            ),
+            None,
         )
     }
 }
