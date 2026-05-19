@@ -36,10 +36,6 @@ pub struct AppState {
     /// Gives the observer its own independent KV cache, eliminating cold-start
     /// recomputation on every audit turn as the session grows.
     pub audit_provider: Arc<dyn Provider>,
-    /// Background document digest provider — pinned to llama-server slot 2 for llamacpp.
-    /// Isolates deep-read summarisation calls from both main inference (slot 0)
-    /// and the observer audit (slot 1), preventing KV cache contention deadlocks.
-    pub digest_provider: Arc<dyn Provider>,
     pub golden_buffer: Arc<RwLock<GoldenBuffer>>,
     pub rejection_buffer: Arc<RwLock<RejectionBuffer>>,
     pub scheduler: Arc<RwLock<JobStore>>,

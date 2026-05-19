@@ -313,17 +313,6 @@ pub fn create_audit_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
     }
 }
 
-/// Create the background document digest provider — pinned to slot 2.
-/// Slot 0: main inference. Slot 1: observer audit. Slot 2: document summarisation.
-/// Isolates deep-read chat_sync calls from both main inference and observer KV caches.
-pub fn create_digest_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
-    if config.general.active_provider == "llamacpp" {
-        Ok(Box::new(llamacpp::LlamaCppProvider::new_with_slot(&config.llamacpp, 2)))
-    } else {
-        create_provider(config)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

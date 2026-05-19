@@ -272,7 +272,6 @@ mod state_tests {
             sessions: Arc::new(RwLock::new(SessionManager::new(&p.join("sess")).unwrap())),
             provider: Arc::new(MockProvider::new()),
             audit_provider: Arc::new(MockProvider::new()),
-            digest_provider: Arc::new(MockProvider::new()),
             golden_buffer: Arc::new(RwLock::new(
                 ern_os::learning::buffers::GoldenBuffer::new(500)
             )),

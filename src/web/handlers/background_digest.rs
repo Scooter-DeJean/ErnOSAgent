@@ -100,7 +100,7 @@ async fn run_background_deep_read(
 
     let digest = crate::web::attachment_reader::deep_read(
         config,
-        state.digest_provider.as_ref(), // slot 2 — isolated from main inference (slot 0) and observer (slot 1)
+        state.provider.as_ref(),
         &state.memory,
         None, // no SSE tx in background tasks
         Some(pages_done),
