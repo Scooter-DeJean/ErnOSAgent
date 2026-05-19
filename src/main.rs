@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
             .context("Failed to create audit provider")?,
     );
     let model_spec = detect_model_spec(&provider).await?;
-    let state = build_app_state(&config, provider, audit_provider, model_spec)?;;
+    let state = build_app_state(&config, provider, audit_provider, model_spec)?;
 
     let _scheduler = ern_os::scheduler::start(state.clone());
 
