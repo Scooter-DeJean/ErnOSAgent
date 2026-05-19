@@ -39,7 +39,8 @@ pub fn new_digest_store() -> Arc<DigestStore> {
 ///
 /// Marks the path as `Pending` in the store before returning, preventing
 /// duplicate spawns if the same file is submitted again before the task completes.
-/// On completion: transitions to `Complete` and notifies the user via the platform.
+/// On completion: generates a substantive response with the full document digest
+/// injected into context and delivers it to the user via the platform.
 ///
 /// # Governance
 /// - Does not block the caller — returns immediately after spawn (§2.4).
@@ -51,6 +52,8 @@ pub fn spawn_background_deep_read(
     path_key: String,
     channel_id: String,
     platform: String,
+    session_id: String,
+    original_content: String,
 ) {
     // Mark pending before spawn to prevent duplicate tasks.
     state.digest_store.insert(
@@ -60,11 +63,14 @@ pub fn spawn_background_deep_read(
 
     let filename = config.filename.clone();
     tokio::spawn(async move {
-        run_background_deep_read(state, config, path_key, filename, channel_id, platform).await;
+        run_background_deep_read(
+            state, config, path_key, filename, channel_id, platform,
+            session_id, original_content,
+        ).await;
     });
 }
 
-/// Background task body: run full deep_read(), store result, notify user.
+/// Background task body: run full deep_read(), generate response, deliver to user.
 /// This is not pub — callers use `spawn_background_deep_read()`.
 async fn run_background_deep_read(
     state: AppState,
@@ -73,6 +79,8 @@ async fn run_background_deep_read(
     filename: String,
     channel_id: String,
     platform: String,
+    session_id: String,
+    original_content: String,
 ) {
     tracing::info!(filename = %filename, path = %path_key, "Background deep-read: started");
 
@@ -83,27 +91,79 @@ async fn run_background_deep_read(
         None, // no SSE tx in background tasks
     ).await;
 
-    // Store digest before notifying — result is durable even if notification fails (§2.4).
+    // Store digest before generating response — durable even if inference fails (§2.4).
     state.digest_store.insert(
         path_key.clone(),
         DigestStatus::Complete { digest: digest.clone() },
     );
-    tracing::info!(filename = %filename, "Background deep-read: complete — digest stored");
+    tracing::info!(filename = %filename, "Background deep-read: complete — generating response");
 
-    // Notify user via platform. Best-effort: failure is logged, not propagated.
-    let notify_msg = format!(
-        "📖 **Background read complete** — `{}` has been fully processed. \
-         Your next message will have access to the complete document.",
-        filename
-    );
+    let response = generate_document_response(
+        &state, &digest, &filename, &session_id, &original_content, &platform,
+    ).await;
+
+    // Deliver response via platform. Best-effort: failure is logged, not propagated.
     let platforms = state.platforms.read().await;
-    if let Err(e) = platforms.send_message(&platform, &channel_id, &notify_msg).await {
+    if let Err(e) = platforms.send_message(&platform, &channel_id, &response).await {
         tracing::warn!(
             error = %e, filename = %filename,
-            "Background deep-read: platform notification failed — digest still available"
+            "Background deep-read: platform delivery failed — digest still cached"
         );
     }
 }
+
+/// Build inference context with full digest and run chat_sync to produce the response.
+/// Extracted to keep run_background_deep_read under 50 lines (§1.2, R11).
+async fn generate_document_response(
+    state: &AppState,
+    digest: &str,
+    filename: &str,
+    session_id: &str,
+    original_content: &str,
+    platform: &str,
+) -> String {
+    let ctx = crate::web::ws_context::build_chat_context(
+        state, original_content, session_id, None, vec![], platform, 0,
+    ).await;
+    let mut messages = ctx.messages;
+
+    // Inject full digest as system directive with complete architectural context.
+    // The model must understand it is in turn 2 of 2 and has the full document.
+    let directive = format!(
+        "[SYSTEM — DOCUMENT PROCESSING ARCHITECTURE]\n\
+         You are Ern-OS, a fully agentic system. This is an automated second inference \
+         turn, triggered by the completion of a background document read.\n\n\
+         CONTEXT:\n\
+         - The user sent `{filename}` in a prior message.\n\
+         - You acknowledged receipt in Turn 1 and informed them you would respond fully.\n\
+         - The background read is now complete. The full document content follows.\n\n\
+         YOUR TASK IN THIS TURN:\n\
+         - Respond to the user's original message with full knowledge of the document.\n\
+         - Do NOT call file_read — the complete document is provided below.\n\
+         - Do NOT reference the two-turn architecture unless directly relevant.\n\
+         - Respond naturally, as if you have just finished reading and are now responding.\n\n\
+         FULL DOCUMENT CONTENT:\n\
+         {digest}",
+        filename = filename,
+        digest = digest,
+    );
+    messages.push(crate::provider::Message::text("system", &directive));
+
+    match state.provider.chat_sync(&messages, None).await {
+        Ok(response) => response,
+        Err(e) => {
+            tracing::error!(
+                error = %e, filename = %filename,
+                "Background deep-read: inference failed"
+            );
+            format!(
+                "I finished reading `{}` but encountered an error generating my response: {}",
+                filename, e
+            )
+        }
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

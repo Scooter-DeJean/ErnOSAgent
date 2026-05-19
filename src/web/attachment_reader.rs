@@ -108,82 +108,39 @@ pub async fn deep_read(
     build_digest(&config.filename, &config.path, &summaries)
 }
 
-/// Read the opening section of a file for an immediate fast reply.
+/// Build the system note injected into the immediate acknowledgment inference turn.
 ///
-/// Reads up to `peek_lines` lines (from `[general] peek_lines` in `ern-os.toml`).
-/// When `peek_lines = 0` (default), uses `file_read`'s natural first-page pagination.
-/// The model engages with this content immediately while the rest is processed
-/// in the background.
+/// The model generates its own acknowledgment based on this note — no document content
+/// is read or injected in turn 1. The full document is processed by the background task,
+/// which triggers turn 2 automatically when complete.
+///
+/// # Architecture
+/// Turn 1 (this note): model acknowledges receipt, explains it is reading in background.
+/// Turn 2 (background_digest.rs): full digest injected, model responds substantively.
 ///
 /// # Governance
-/// - `peek_lines` is owner-configured — not a hardcoded constant (§2.1).
-/// - One `read_page` call + one `count_tokens` call — no loop, no accumulation (§8.3).
-/// - `token_budget` is a safety guard measured upstream — never estimated (§8.3).
-/// - On `count_tokens` failure, includes the content and lets `enforce_context_budget`
-///   handle any overspill (§2.4: feature off, not degraded).
-pub async fn peek_read(
-    path: &str,
-    filename: &str,
-    peek_lines: usize,
-    token_budget: usize,
-    provider: &dyn Provider,
-) -> (String, Option<usize>) {
-    tracing::info!(
-        path = %path, filename = %filename, peek_lines, token_budget,
-        "Peek-read: reading opening section for immediate reply"
-    );
-
-    // peek_lines = 0 → use token_budget as page size (file_read's natural pagination).
-    // peek_lines > 0 → owner-configured line count.
-    let page_size = if peek_lines == 0 { token_budget } else { peek_lines };
-    let (content, next_line) = read_page(path, 1, page_size).await;
-
-    if content.trim().is_empty() {
-        return (
-            format!(
-                "[`{}` appears to be empty or could not be read. \
-                 Full document is being processed in the background.]",
-                filename
-            ),
-            None,
-        );
-    }
-
-    // Validate the first page fits within the budget before injecting.
-    // On failure, include it anyway — the downstream enforce_context_budget() will trim (§2.4).
-    let probe = vec![crate::provider::Message::text("user", &content)];
-    let fits = match provider.count_tokens(&probe, None, false).await {
-        Ok(tokens) => {
-            tracing::info!(filename = %filename, tokens, token_budget, "Peek-read: first page measured");
-            tokens < token_budget
-        }
-        Err(e) => {
-            tracing::warn!(filename = %filename, error = %e,
-                "Peek-read: count_tokens failed — including first page, enforce_context_budget will trim");
-            true
-        }
-    };
-
-    if fits {
-        (
-            format!(
-                "{}\n\n[Opening section of `{}` shown — full document is being read in the background. \
-                 I will notify you when the complete analysis is ready.]",
-                content, filename
-            ),
-            next_line,
-        )
-    } else {
-        (
-            format!(
-                "[`{}` opening section exceeds available context. \
-                 Full document is being read in the background. \
-                 I will notify you when the complete analysis is ready.]",
-                filename
-            ),
-            None,
-        )
-    }
+/// - No hardcoded model output (§8.3) — this is an instruction, not canned text.
+/// - No file I/O in this path — background task owns all file reading (§2.4).
+pub fn peek_acknowledgment_note(filename: &str, file_size: usize) -> String {
+    format!(
+        "[SYSTEM — DOCUMENT PROCESSING ARCHITECTURE]\n\
+         You are Ern-OS, a fully agentic system. The user has sent a large document \
+         (`{filename}`, {file_size} bytes) that exceeds the available context window for this turn.\n\n\
+         This system operates a two-turn reading architecture for large documents:\n\n\
+         TURN 1 (NOW — this turn): You acknowledge receipt of the document. You do NOT have \
+         the document content in your context. Do NOT call file_read. Do NOT attempt to read \
+         or summarise the document. The document is being read in full by a background process \
+         running in parallel to this response.\n\n\
+         TURN 2 (AUTOMATIC — delivered after background read completes): A second inference \
+         turn will be triggered automatically once the full document has been processed. That \
+         turn will have the complete document content injected into context. You will respond \
+         substantively at that point.\n\n\
+         Your task in this turn: acknowledge that you have received `{filename}`, inform the \
+         user that you are reading it in full and will respond completely when done, and invite \
+         them to ask questions in the meantime if they wish.",
+        filename = filename,
+        file_size = file_size,
+    )
 }
 
 

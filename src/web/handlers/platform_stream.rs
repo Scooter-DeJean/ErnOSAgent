@@ -86,7 +86,6 @@ async fn run_streaming_pipeline(
     // Both values derived from provider.count_tokens() — no heuristics (§2.1, §8.3).
     let provider = state.provider.as_ref();
     let mut deep_read_digests: Vec<(String, String)> = Vec::new();
-    let mut peek_continuations: Vec<(String, String, Option<usize>)> = Vec::new();
     if msg.is_admin {
         let base_messages = crate::web::ws_context::build_chat_context(
             &state, &msg.content, &session_id, None, vec![], &msg.platform, tools_chars,
@@ -154,18 +153,18 @@ async fn run_streaming_pipeline(
                         spawn_background_deep_read(
                             state.clone(), bg_config, path.clone(),
                             msg.channel_id.clone(), msg.platform.clone(),
+                            session_id.clone(), msg.content.clone(),
                         );
                     } else {
                         tracing::info!(filename = %att.filename, "Deep-read gate: background read already in progress");
                     }
 
-                    // Immediate reply: peek at the opening section within the real remaining budget.
-                    let (peek, next_line) = crate::web::attachment_reader::peek_read(
-                        path, &att.filename,
-                        state.config.general.peek_lines, remaining_tokens, provider,
-                    ).await;
-                    deep_read_digests.push((att.filename.clone(), peek));
-                    peek_continuations.push((path.clone(), att.filename.clone(), next_line));
+                    // Immediate turn: inject acknowledgment system note so model understands
+                    // the two-turn architecture and does not attempt file_read itself.
+                    let note = crate::web::attachment_reader::peek_acknowledgment_note(
+                        &att.filename, att.content_text.as_deref().unwrap_or("").len(),
+                    );
+                    deep_read_digests.push((att.filename.clone(), note));
                 }
             }
         }
@@ -194,19 +193,6 @@ async fn run_streaming_pipeline(
         &state, &content_with_attachments, &session_id, None, images, &msg.platform, tools_chars,
     ).await;
     let mut messages = ctx.messages;
-
-    for (path, filename, next_line) in &peek_continuations {
-        let directive = match next_line {
-            Some(line) => format!(
-                "[AGENT DIRECTIVE — NOT FROM USER]\nYou have read the opening section of `{filename}`.\nYou are a fully agentic system with access to the `file_read` tool.\nCall file_read with path=\"{path}\" and start_line={line} to continue reading.\nEngage with the opening content and use file_read to read further as needed.",
-            ),
-            None => format!(
-                "[AGENT DIRECTIVE — NOT FROM USER]\nYou have read `{filename}` in full (the file fits in one page).\nYou are a fully agentic system with tool access. Engage with the content."
-            ),
-        };
-        messages.push(crate::provider::Message::text("system", &directive));
-        tracing::info!(filename = %filename, next_line = ?next_line, "Peek: agent directive injected");
-    }
 
     let provider = state.provider.as_ref();
 
