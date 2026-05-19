@@ -64,6 +64,8 @@ pub fn execute(args: &serde_json::Value, data_dir: &Path) -> anyhow::Result<Stri
 }
 
 /// Return the last N lines from the most recent engine log file.
+/// Automatically restricts to lines produced since the current process started
+/// (i.e. since the last "Ern-OS starting" entry) — prevents stale log pollution.
 fn tail_logs(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<String> {
     let log_files = discover_log_files(data_dir);
     let log_path = match log_files.first() {
@@ -72,22 +74,26 @@ fn tail_logs(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<String
     };
 
     let content = std::fs::read_to_string(log_path)?;
-    let lines: Vec<String> = content.lines().rev().map(|s| s.to_string()).collect();
+    let lines: Vec<String> = current_session_lines(&content)
+        .rev()
+        .map(|s| s.to_string())
+        .collect();
     if lines.is_empty() {
-        return Ok("Log file is empty.".to_string());
+        return Ok("No log lines for the current session yet.".to_string());
     }
     Ok(paginate_lines(&lines, get_page(args), get_per_page(args)))
 }
 
-/// Grep for ERROR and WARN lines across all daily log files, newest first.
+/// Grep for ERROR and WARN lines — current session only.
 fn grep_errors(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<String> {
     let n = args["max"].as_u64().unwrap_or(30) as usize;
     let mut errors = Vec::new();
 
-    for log_path in discover_log_files(data_dir) {
+    // Only the most recent log file; older files are previous sessions.
+    if let Some(log_path) = discover_log_files(data_dir).into_iter().next() {
         if let Ok(content) = std::fs::read_to_string(&log_path) {
             let fname = log_path.file_name().unwrap_or_default().to_string_lossy();
-            for line in content.lines() {
+            for line in current_session_lines(&content) {
                 let lower = line.to_lowercase();
                 if lower.contains("\"error\"") || lower.contains("\"warn\"")
                     || lower.contains("panic") || lower.contains("failed")
@@ -96,7 +102,6 @@ fn grep_errors(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<Stri
                     if errors.len() >= n { break; }
                 }
             }
-            if errors.len() >= n { break; }
         }
     }
 
@@ -105,13 +110,13 @@ fn grep_errors(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<Stri
     errors.truncate(n);
 
     if errors.is_empty() {
-        Ok("No errors or warnings found in logs.".into())
+        Ok("No errors or warnings in the current session logs.".into())
     } else {
         Ok(paginate_lines(&errors, get_page(args), get_per_page(args)))
     }
 }
 
-/// Search logs for a specific pattern across all daily log files.
+/// Search logs for a specific pattern — current session only.
 fn search_logs(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<String> {
     let pattern = args["pattern"].as_str().unwrap_or("");
     if pattern.is_empty() {
@@ -121,21 +126,20 @@ fn search_logs(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<Stri
     let lower_pattern = pattern.to_lowercase();
     let mut matches = Vec::new();
 
-    // Search daily rotating logs
-    for path in discover_log_files(data_dir) {
+    // Search current session lines of the most recent daily log.
+    if let Some(path) = discover_log_files(data_dir).into_iter().next() {
         if let Ok(content) = std::fs::read_to_string(&path) {
             let fname = path.file_name().unwrap_or_default().to_string_lossy();
-            for (i, line) in content.lines().enumerate() {
+            for (i, line) in current_session_lines(&content).enumerate() {
                 if line.to_lowercase().contains(&lower_pattern) {
                     matches.push(format!("[{}:{}] {}", fname, i + 1, line));
                     if matches.len() >= n { break; }
                 }
             }
-            if matches.len() >= n { break; }
         }
     }
 
-    // Also search auxiliary log files
+    // Also search auxiliary log files (these are session-agnostic by design).
     let aux_files = [
         data_dir.join("recompile_log.md"),
         data_dir.join("self_edit_log.jsonl"),
@@ -154,7 +158,7 @@ fn search_logs(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<Stri
     }
 
     if matches.is_empty() {
-        Ok(format!("No matches for '{}' in logs.", pattern))
+        Ok(format!("No matches for '{}' in current session logs.", pattern))
     } else {
         Ok(paginate_lines(&matches, get_page(args), get_per_page(args)))
     }
@@ -174,6 +178,28 @@ fn list_self_edits(data_dir: &Path, args: &serde_json::Value) -> anyhow::Result<
         return Ok("No self-edit entries.".to_string());
     }
     Ok(paginate_lines(&lines, get_page(args), get_per_page(args)))
+}
+
+/// Return an iterator over lines from the current process session only.
+///
+/// Finds the position of the last `"Ern-OS starting"` entry in the log
+/// (the most recent process start) and yields only the lines from that
+/// point forward. This is the authoritative session boundary — the log
+/// is append-only and `tracing_appender` guarantees ordering.
+///
+/// If no session-start marker is found (e.g. empty log or a log without
+/// a start event), falls back to all lines so no data is silently lost.
+fn current_session_lines(content: &str) -> impl DoubleEndedIterator<Item = &str> {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Walk backwards to find the last occurrence of the startup marker.
+    let session_start_idx = lines
+        .iter()
+        .rposition(|line| line.contains("Ern-OS starting"));
+
+    let start = session_start_idx.unwrap_or(0);
+    // Return a slice iterator — supports rev() for tail_logs
+    lines[start..].to_vec().into_iter().collect::<Vec<_>>().into_iter()
 }
 
 #[cfg(test)]
@@ -271,21 +297,26 @@ mod tests {
     }
 
     #[test]
-    fn test_errors_grep_across_multiple_files() {
+    fn test_errors_grep_current_session_only() {
+        // Verifies that errors() does NOT search previous-day log files —
+        // only the most recent log, and only lines since the last startup marker.
         let dir = test_dir("errors_multi2");
+        // Old day's log — must be ignored
         fs::write(
             dir.join("logs/ern-os.log.2026-04-27"),
-            "{\"level\":\"ERROR\",\"fields\":{\"message\":\"old error\"}}\n",
+            "{\"level\":\"ERROR\",\"fields\":{\"message\":\"old session error\"}}\n",
         ).unwrap();
+        // Current day's log — has a startup marker followed by a new error
         fs::write(
             dir.join("logs/ern-os.log.2026-04-28"),
-            "{\"level\":\"ERROR\",\"fields\":{\"message\":\"new error\"}}\n",
+            "{\"level\":\"INFO\",\"fields\":{\"message\":\"Ern-OS starting\"}}\n\
+             {\"level\":\"ERROR\",\"fields\":{\"message\":\"current session error\"}}\n",
         ).unwrap();
 
         let args = serde_json::json!({"action": "errors"});
         let result = execute(&args, &dir).unwrap();
-        assert!(result.contains("old error"));
-        assert!(result.contains("new error"));
+        assert!(result.contains("current session error"), "current session error must appear");
+        assert!(!result.contains("old session error"), "old session error must be excluded");
 
         let _ = fs::remove_dir_all(&dir);
     }
