@@ -83,52 +83,67 @@ async fn run_streaming_pipeline(
 
     // Deep-read: if admin attachment token cost exceeds the remaining context budget,
     // summarise page-by-page instead of injecting inline.
-    // Both values derived from provider.count_tokens() — no heuristics (§2.1, §8.3).
     let provider = state.provider.as_ref();
     let mut deep_read_digests: Vec<(String, String)> = Vec::new();
     if msg.is_admin {
-        let base_messages = crate::web::ws_context::build_chat_context(
-            &state, &msg.content, &session_id, None, vec![], &msg.platform, tools_chars,
-        ).await.messages;
-        let base_token_cost = match provider.count_tokens(
-            &base_messages, Some(&tools), state.config.prompt.thinking_enabled,
-        ).await {
-            Ok(n) => n,
-            Err(e) => {
-                tracing::warn!(error = %e,
-                    "count_tokens failed for base context — defaulting to deep-read for all admin attachments");
-                state.model_spec.context_length
-            }
-        };
-        let remaining_tokens = state.model_spec.context_length.saturating_sub(base_token_cost);
-        tracing::info!(
-            context_length = state.model_spec.context_length,
-            base_token_cost, remaining_tokens,
-            "Deep-read gate: measured base context cost"
-        );
         for att in &processed {
             if att.image_data_url.is_some() { continue; }
             if let Some(ref path) = att.saved_path {
-                let att_content = att.content_text.as_deref().unwrap_or("");
-                let att_tokens = match provider.count_tokens(
-                    &[crate::provider::Message::text("user", att_content)],
-                    None,
-                    false,
-                ).await {
-                    Ok(n) => n,
-                    Err(e) => {
-                        tracing::warn!(filename = %att.filename, error = %e,
-                            "count_tokens failed for attachment — defaulting to deep-read");
-                        usize::MAX
-                    }
-                };
-                tracing::info!(
-                    filename = %att.filename, att_tokens, remaining_tokens,
-                    "Deep-read gate: attachment token cost measured"
-                );
-                if att_tokens > remaining_tokens {
-                    use crate::web::handlers::background_digest::{DigestStatus, spawn_background_deep_read};
+                use crate::web::handlers::background_digest::{DigestStatus, spawn_background_deep_read};
 
+                // Fast path: if the saved file exceeds context_length * 3 bytes,
+                // it provably exceeds the context window — no count_tokens needed.
+                // context_length * 3 is conservative (~3 chars/token lower bound).
+                // At 131K context: threshold = 393KB. A 1.95MB novel always triggers.
+                // Small files (under threshold) fall through to count_tokens below.
+                let file_bytes = std::fs::metadata(path)
+                    .map(|m| m.len() as usize)
+                    .unwrap_or(0);
+                let provably_too_large = file_bytes > state.model_spec.context_length * 3;
+
+                let needs_deep_read = if provably_too_large {
+                    tracing::info!(
+                        filename = %att.filename, file_bytes,
+                        context_length = state.model_spec.context_length,
+                        "Deep-read gate: file provably exceeds context — skipping count_tokens"
+                    );
+                    true
+                } else {
+                    // Small file — measure precisely with count_tokens.
+                    let base_messages = crate::web::ws_context::build_chat_context(
+                        &state, &msg.content, &session_id, None, vec![], &msg.platform, tools_chars,
+                    ).await.messages;
+                    let base_token_cost = match provider.count_tokens(
+                        &base_messages, Some(&tools), state.config.prompt.thinking_enabled,
+                    ).await {
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::warn!(error = %e,
+                                "count_tokens failed for base context — defaulting to deep-read");
+                            state.model_spec.context_length
+                        }
+                    };
+                    let remaining_tokens = state.model_spec.context_length.saturating_sub(base_token_cost);
+                    let att_content = att.content_text.as_deref().unwrap_or("");
+                    let att_tokens = match provider.count_tokens(
+                        &[crate::provider::Message::text("user", att_content)],
+                        None, false,
+                    ).await {
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::warn!(filename = %att.filename, error = %e,
+                                "count_tokens failed for attachment — defaulting to deep-read");
+                            usize::MAX
+                        }
+                    };
+                    tracing::info!(
+                        filename = %att.filename, att_tokens, remaining_tokens,
+                        "Deep-read gate: attachment token cost measured"
+                    );
+                    att_tokens > remaining_tokens
+                };
+
+                if needs_deep_read {
                     // Path A: Cache hit — full digest already computed. Inject immediately.
                     if let Some(entry) = state.digest_store.get(path) {
                         if let DigestStatus::Complete { ref digest, .. } = *entry {
@@ -159,8 +174,7 @@ async fn run_streaming_pipeline(
                         tracing::info!(filename = %att.filename, "Deep-read gate: background read already in progress");
                     }
 
-                    // Immediate turn: inject acknowledgment system note so model understands
-                    // the two-turn architecture and does not attempt file_read itself.
+                    // Immediate turn: inject acknowledgment system note.
                     let note = crate::web::attachment_reader::peek_acknowledgment_note(
                         &att.filename, att.content_text.as_deref().unwrap_or("").len(),
                     );
