@@ -118,6 +118,12 @@ pub struct LlamaCppConfig {
     pub visual_token_budget: usize,
     /// Optional LoRA adapter to load at inference time
     pub lora_adapter: Option<String>,
+    /// Context window size per KV cache slot (tokens).
+    /// Total server context = n_ctx_per_slot × n_parallel_slots.
+    /// Must be set explicitly when running multiple parallel slots so the
+    /// server allocates enough total KV cache. Defaults to 131072.
+    #[serde(default = "default_n_ctx_per_slot")]
+    pub n_ctx_per_slot: usize,
 }
 
 impl Default for LlamaCppConfig {
@@ -135,9 +141,12 @@ impl Default for LlamaCppConfig {
             sae_embed_port: 8082,
             visual_token_budget: 560,
             lora_adapter: None,
+            n_ctx_per_slot: default_n_ctx_per_slot(),
         }
     }
 }
+
+fn default_n_ctx_per_slot() -> usize { 131072 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OllamaConfig {

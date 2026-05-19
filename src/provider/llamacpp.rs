@@ -53,7 +53,11 @@ impl LlamaCppProvider {
             self.config.port.to_string(),
             "--jinja".to_string(), // Use model's built-in Jinja chat template for tool calling
             "-c".to_string(),
-            "0".to_string(), // Auto-detect context from GGUF
+            // Total KV cache = n_ctx_per_slot × n_parallel.
+            // llama-server divides the total context evenly across all slots.
+            // With -np 3 and -c 0 (auto from GGUF), each slot gets only ~43K tokens.
+            // We must pass the full total so each slot retains its configured budget.
+            (self.config.n_ctx_per_slot * 3).to_string(),
             "-np".to_string(),
             "3".to_string(), // Slot 0: main inference. Slot 1: observer audit. Slot 2: background document digest.
             "-ngl".to_string(),
