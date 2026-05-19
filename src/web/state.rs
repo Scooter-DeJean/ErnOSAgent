@@ -74,4 +74,9 @@ pub struct AppState {
     /// DashMap is lock-free; no RwLock wrapper required.
     /// Populated by spawn_background_deep_read(); consumed by the deep-read gate.
     pub digest_store: Arc<DigestStore>,
+    /// Notified when the current main inference stream completes ([DONE] received).
+    /// Background deep-read tasks wait on this before starting GPU work, preventing
+    /// concurrent GPU saturation between slot 0 (main inference) and slot 1 (deep-read).
+    /// Uses notify_waiters() so multiple concurrent deep-reads all wake on one signal.
+    pub inference_done: Arc<tokio::sync::Notify>,
 }

@@ -69,6 +69,7 @@ fn build_test_state(tmp: &std::path::Path) -> AppState {
         )),
         mesh_runtime: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
         digest_store: crate::web::handlers::background_digest::new_digest_store(),
+        inference_done: std::sync::Arc::new(tokio::sync::Notify::new()),
     }
 }
 

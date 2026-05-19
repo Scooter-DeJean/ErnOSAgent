@@ -292,6 +292,11 @@ async fn run_streaming_pipeline(
     // Stop keepalive — inference is complete
     keepalive_cancel.cancel();
 
+    // Signal all waiting background deep-read tasks that the main inference stream
+    // is complete. They wait on this before starting GPU work to prevent concurrent
+    // GPU saturation between slot 0 (main inference) and slot 1 (deep-read).
+    state.inference_done.notify_waiters();
+
     // Dispatch result
     match result {
         ConsumeResult::Reply { ref text, ref thinking } => {

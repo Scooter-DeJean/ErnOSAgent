@@ -441,6 +441,7 @@ fn build_app_state(
         review_deck: Arc::new(RwLock::new(review_deck)),
         mesh_runtime: Arc::new(RwLock::new(mesh_runtime)),
         digest_store: ern_os::web::handlers::background_digest::new_digest_store(),
+        inference_done: Arc::new(tokio::sync::Notify::new()),
     })
 }
 

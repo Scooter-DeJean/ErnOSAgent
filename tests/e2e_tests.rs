@@ -320,6 +320,7 @@ mod state_tests {
             )),
             mesh_runtime: Arc::new(RwLock::new(None)),
             digest_store: ern_os::web::handlers::background_digest::new_digest_store(),
+            inference_done: std::sync::Arc::new(tokio::sync::Notify::new()),
         }
     }
 

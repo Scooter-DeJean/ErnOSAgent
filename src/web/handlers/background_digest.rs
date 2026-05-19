@@ -98,6 +98,15 @@ async fn run_background_deep_read(
 ) {
     tracing::info!(filename = %filename, path = %path_key, "Background deep-read: started");
 
+    // Wait for the main inference stream to complete before starting GPU work.
+    // A 130K-token deep-read page running concurrently with main inference saturates
+    // the GPU and multiplies turn latency by ~11x (measured: 77 tok/s → 6.7 tok/s).
+    // inference_done is signalled by platform_stream after [DONE] is received.
+    // If no inference is currently running, notify_waiters() has already fired and
+    // this returns immediately (Notify stores one pending permit).
+    state.inference_done.notified().await;
+    tracing::info!(filename = %filename, "Background deep-read: inference_done received — starting GPU work");
+
     let digest = crate::web::attachment_reader::deep_read(
         config,
         state.provider.as_ref(),
