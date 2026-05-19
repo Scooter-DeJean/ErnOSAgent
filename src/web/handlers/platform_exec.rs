@@ -229,7 +229,7 @@ pub async fn run_platform_react(
                 ).await;
                 if let ConsumeResult::Reply { text, .. } = recovered {
                     let (audited, audit) = audit_and_capture(
-                        state, provider, &mut messages, &tools, user_query, &text, session_id,
+                        state, provider, &mut messages, &tools, user_query, &text, None, session_id,
                     ).await;
                     return (audited, tool_events, Some(audit));
                 }
@@ -251,7 +251,7 @@ pub async fn run_platform_react(
             }
             ConsumeResult::Reply { text, .. } => {
                 let (audited, audit) = audit_and_capture(
-                    state, provider, &mut messages, &tools, user_query, &text, session_id,
+                    state, provider, &mut messages, &tools, user_query, &text, None, session_id,
                 ).await;
                 return (audited, tool_events, Some(audit));
             }
@@ -301,8 +301,9 @@ async fn handle_react_tool(
     // Check for reply_request (loop terminator)
     if let Some(reply_text) = crate::tools::schema::extract_reply_text(tc) {
         let (audited, audit) = audit_and_capture(
-            state, provider, messages, tools, user_query, &reply_text, session_id,
+            state, provider, messages, tools, user_query, &reply_text, None, session_id,
         ).await;
+
         crate::web::ws_learning::ingest_assistant_turn(state, &audited, session_id).await;
         return Some((audited, tool_events.clone(), Some(audit)));
     }

@@ -247,7 +247,7 @@ async fn dispatch_result(
     match result {
         ConsumeResult::Reply { text, thinking } => {
             let (audited, audit) = audit_and_capture(
-                state, provider, messages, tools, user_query, &text, session_id,
+                state, provider, messages, tools, user_query, &text, thinking.as_deref(), session_id,
             ).await;
             crate::web::ws_learning::ingest_assistant_turn(state, &audited, session_id).await;
             crate::web::ws_learning::spawn_insight_extraction(state, user_query, &audited);
@@ -389,11 +389,21 @@ pub async fn audit_and_capture(
     tools: &serde_json::Value,
     user_query: &str,
     initial_text: &str,
+    thinking: Option<&str>,
     session_id: &str,
 ) -> (String, AuditSummary) {
     if !state.config.observer.enabled || initial_text.is_empty() {
         return (initial_text.to_string(), AuditSummary::skipped());
     }
+
+    // Reconstruct the raw model output (thinking + text) for the first observer call.
+    // The llama-server KV cache holds the full token sequence including thinking tokens.
+    // Passing the thinking-stripped text breaks the prefix match and forces a cold
+    // recompute of the entire conversation history on every turn.
+    let raw_first_candidate = match thinking {
+        Some(t) if !t.is_empty() => format!("<think>{}</think>\n{}", t, initial_text),
+        _ => initial_text.to_string(),
+    };
 
     let tool_context = super::platform_exec::build_tool_context(messages);
     let mut current_text = initial_text.to_string();
@@ -403,8 +413,11 @@ pub async fn audit_and_capture(
     // If this loops, it means the observer feedback isn't being followed,
     // which is a deeper bug to fix — not mask with a bailout.
     loop {
+        // First call uses the raw candidate (with thinking) to match the KV cache prefix.
+        // Retries use current_text (which is the regenerated clean response).
+        let candidate = if retries == 0 { &raw_first_candidate } else { &current_text };
         match crate::observer::audit_response(
-            provider, messages, &current_text, &tool_context, user_query,
+            provider, messages, candidate, &tool_context, user_query,
         ).await {
             Ok(output) if output.result.verdict.is_allowed() => {
                 crate::observer::persist_audit_result(&state.config.general.data_dir, &output.result);

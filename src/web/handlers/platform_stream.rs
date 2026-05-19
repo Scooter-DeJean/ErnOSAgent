@@ -301,7 +301,7 @@ async fn run_streaming_pipeline(
                     let retry_result = stream_consumer::consume_stream(retry_rx, &mut retry_sink).await;
                     if let ConsumeResult::Reply { ref text, .. } = retry_result {
                         if !text.trim().is_empty() {
-                            emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, &tx).await;
+                            emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, None, &tx).await;
                             let _ = emit(&tx, "done", &serde_json::json!({})).await;
                             return;
                         }
@@ -329,7 +329,7 @@ async fn run_streaming_pipeline(
                     })).await;
                 }
             } else {
-                emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, &tx).await;
+                emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, thinking.as_deref(), &tx).await;
             }
         }
         ConsumeResult::PlanProposal { title, plan_markdown, estimated_turns } => {
@@ -359,7 +359,8 @@ async fn run_streaming_pipeline(
             let retry_result = stream_consumer::consume_stream(retry_rx, &mut retry_sink).await;
             if let ConsumeResult::Reply { ref text, .. } = retry_result {
                 if !text.trim().is_empty() {
-                    emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, &tx).await;
+                    emit_reply(&state, provider, &mut messages, &tools, &content_with_attachments, &session_id, text, None, &tx).await;
+
                     let _ = emit(&tx, "done", &serde_json::json!({})).await;
                     return;
                 }
@@ -389,10 +390,11 @@ async fn emit_reply(
     state: &AppState, provider: &dyn crate::provider::Provider,
     messages: &mut Vec<crate::provider::Message>, tools: &serde_json::Value,
     user_query: &str, session_id: &str,
-    text: &str, tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
+    text: &str, thinking: Option<&str>,
+    tx: &tokio::sync::mpsc::Sender<Result<Event, Infallible>>,
 ) {
     let (audited, audit) = super::platform_ingest::audit_and_capture(
-        state, provider, messages, tools, user_query, text, session_id,
+        state, provider, messages, tools, user_query, text, thinking, session_id,
     ).await;
     let _ = emit(tx, "audit", &serde_json::json!({
         "verdict": audit.verdict, "confidence": audit.confidence,
