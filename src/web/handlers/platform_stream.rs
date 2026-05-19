@@ -306,11 +306,6 @@ async fn run_streaming_pipeline(
     // Stop keepalive — inference is complete
     keepalive_cancel.cancel();
 
-    // Signal all waiting background deep-read tasks that the main inference stream
-    // is complete. They wait on this before starting GPU work to prevent concurrent
-    // GPU saturation between slot 0 (main inference) and slot 1 (deep-read).
-    state.inference_done.notify_waiters();
-
     // Dispatch result
     match result {
         ConsumeResult::Reply { ref text, ref thinking } => {
@@ -441,6 +436,11 @@ async fn emit_reply(
     let _ = emit(tx, "audit", &serde_json::json!({
         "verdict": audit.verdict, "confidence": audit.confidence,
     })).await;
+
+    // Signal deep-read tasks: observer is done, GPU is free for background work.
+    // Moved here from after [DONE] — observer and deep-read were starting simultaneously
+    // causing GPU saturation. Deep-read now starts only after observer completes.
+    state.inference_done.notify_waiters();
 
     // Persist BEFORE emitting response — this lets us include the accurate
     // message_count so the router builds buttons targeting the correct turn.
