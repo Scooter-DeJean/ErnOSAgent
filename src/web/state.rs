@@ -32,10 +32,16 @@ pub struct AppState {
     pub memory: Arc<RwLock<MemoryManager>>,
     pub sessions: Arc<RwLock<SessionManager>>,
     pub provider: Arc<dyn Provider>,
-    /// Observer-dedicated provider — pinned to llama-server slot 1 for llamacpp.
-    /// Gives the observer its own independent KV cache, eliminating cold-start
-    /// recomputation on every audit turn as the session grows.
+    /// Observer-dedicated provider — pinned to llama-server slot 0 for llamacpp.
+    /// Same slot as main inference — observer sends the identical conversation prefix
+    /// so llama-server reuses the hot KV cache. Only the delta (audit prompt + candidate)
+    /// is computed, reducing observer latency from ~142s to ~14s.
     pub audit_provider: Arc<dyn Provider>,
+    /// Background deep-read provider — pinned to llama-server slot 1 for llamacpp.
+    /// Deep-read pages are 130K tokens of fresh document content with no KV cache
+    /// reuse benefit. Running on slot 1 keeps slot 0 free for inference, count_tokens,
+    /// and observer, eliminating the 114s count_tokens block on Turn 2.
+    pub digest_provider: Arc<dyn Provider>,
     pub golden_buffer: Arc<RwLock<GoldenBuffer>>,
     pub rejection_buffer: Arc<RwLock<RejectionBuffer>>,
     pub scheduler: Arc<RwLock<JobStore>>,

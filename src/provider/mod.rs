@@ -294,29 +294,32 @@ pub fn create_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
     }
 }
 
-/// Create the audit provider used exclusively by the observer.
-///
-/// For llamacpp, this returns a provider pinned to slot 1, giving the observer
-/// its own independent KV cache accumulation separate from the main inference
-/// slot (slot 0). The server must be started with `-np 2` for this to have
-/// effect — which `build_server_args` ensures.
-///
-/// For all other providers, slot affinity is not a supported concept, so the
-/// audit provider is identical to the main provider. The observer will share
-/// the same connection path and derive no KV cache benefit, but will function
-/// correctly.
 /// Create the observer (audit) provider.
 ///
 /// Uses the DEFAULT slot (slot 0) — same as main inference.
 /// The observer sends the identical conversation prefix (1-to-1 context parity),
 /// so llama-server reuses the hot KV cache from the just-completed main inference.
-/// Only the delta (candidate + audit prompt) is computed — fast.
-///
-/// Slot 1 (previous approach) was wrong: slot 1 never had the prefix cached,
-/// causing a full cold-start recompute (~23K tokens = ~142s) on every turn.
+/// Only the delta (candidate + audit prompt) is computed — ~14s instead of ~142s.
 pub fn create_audit_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
     create_provider(config)
 }
+
+/// Create the background deep-read provider.
+///
+/// Pinned to slot 1 for llamacpp. Deep-read pages are 130K tokens of fresh
+/// document content — no KV cache reuse benefit from main inference.
+/// Running on slot 1 keeps slot 0 free for inference, count_tokens, and observer,
+/// eliminating the slot contention that caused 114s latency on Turn 2.
+///
+/// With `-np 2` the server has exactly two slots (0 and 1). This is safe.
+pub fn create_digest_provider(config: &AppConfig) -> Result<Box<dyn Provider>> {
+    if config.general.active_provider == "llamacpp" {
+        Ok(Box::new(llamacpp::LlamaCppProvider::new_with_slot(&config.llamacpp, 1)))
+    } else {
+        create_provider(config)
+    }
+}
+
 
 #[cfg(test)]
 mod tests {

@@ -78,6 +78,14 @@ pub extern "C" fn Java_com_ernos_app_EngineService_startEngine(
             }
         };
 
+        let digest_provider = match crate::provider::create_digest_provider(&config) {
+            Ok(p) => std::sync::Arc::from(p),
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to create digest provider on Android");
+                return;
+            }
+        };
+
         // Wait for provider health before querying model spec (auto-derived, per governance §2.1/§5)
         tracing::info!("Waiting for provider health before querying model spec...");
         let mut retries = 0;
@@ -107,7 +115,7 @@ pub extern "C" fn Java_com_ernos_app_EngineService_startEngine(
             }
         };
 
-        let state = match build_app_state(&config, provider.clone(), audit_provider, model_spec) {
+        let state = match build_app_state(&config, provider.clone(), audit_provider, digest_provider, model_spec) {
             Some(s) => s,
             None => return,
         };
@@ -184,6 +192,7 @@ fn build_app_state(
     config: &crate::config::AppConfig,
     provider: std::sync::Arc<dyn crate::provider::Provider>,
     audit_provider: std::sync::Arc<dyn crate::provider::Provider>,
+    digest_provider: std::sync::Arc<dyn crate::provider::Provider>,
     model_spec: crate::model::ModelSpec,
 ) -> Option<crate::web::state::AppState> {
     let data_dir = &config.general.data_dir;
@@ -265,5 +274,7 @@ fn build_app_state(
         )),
         mesh_runtime: std::sync::Arc::new(tokio::sync::RwLock::new(None)),
         digest_store: crate::web::handlers::background_digest::new_digest_store(),
+        inference_done: std::sync::Arc::new(tokio::sync::Notify::new()),
+        digest_provider,
     })
 }
