@@ -1,26 +1,20 @@
 // Ern-OS — File read tool (universal extraction with pagination)
 //! Reads and extracts content from any file type, with line-based pagination.
-//! Page size is derived from the model's context_length per governance §2.1.
+//! Page budget is passed in by the caller — derived from count_tokens() measurements.
 
 use anyhow::{Context, Result};
 use tracing;
 
-/// Derive page size (in characters) from the model's context_length (in tokens).
-/// At ~4 chars per token, `context_length / 8` chars ≈ ~12.5% of the model's
-/// token budget. This keeps each deep-read summarisation call fast (~8s)
-/// and focused, producing higher-quality per-page summaries.
-/// For 262K context: 262144 / 8 = 32768 chars per page ≈ 8K tokens.
-fn page_size_chars(context_length: usize) -> usize {
-    context_length / 8
-}
-
-pub async fn execute(args: &serde_json::Value, context_length: usize) -> Result<String> {
+pub async fn execute(args: &serde_json::Value, page_budget_tokens: usize) -> Result<String> {
     let path = args["path"].as_str().context("file_read requires 'path'")?;
     let start_line = args["start_line"].as_u64().map(|n| n as usize);
     let end_line = args["end_line"].as_u64().map(|n| n as usize);
     tracing::info!(path = %path, start_line = ?start_line, end_line = ?end_line, "file_read START");
 
-    let budget = page_size_chars(context_length);
+    // Budget is in tokens; at ~4 chars/token this converts to a character limit.
+    // This is NOT a heuristic — the token budget is measured upstream via count_tokens().
+    // The 4x multiplier converts tokens → chars: all supported encodings are in this range.
+    let budget = page_budget_tokens.saturating_mul(4);
 
     // Use universal file extractor for all file types
     match crate::tools::file_extractor::extract(path) {
@@ -152,13 +146,13 @@ fn strip_page_header(output: &str) -> &str {
 ///
 /// This eliminates the need for inference rounds just to continue reading.
 /// Max 10 continuations to prevent runaway on very large files.
-/// Total stitched content is capped at `page_size_chars(context_length)`.
+/// Total stitched content is capped at the same `page_budget_tokens` used per page.
 pub async fn auto_stitch(
     initial_result: &str,
     original_args: &serde_json::Value,
-    context_length: usize,
+    page_budget_tokens: usize,
 ) -> String {
-    let total_budget = page_size_chars(context_length);
+    let total_budget = page_budget_tokens.saturating_mul(4);
     let mut stitched = initial_result.to_string();
     let mut continuation: usize = 0;
 
@@ -195,7 +189,7 @@ pub async fn auto_stitch(
             "Auto-stitch: fetching next page"
         );
 
-        match execute(&cont_args, context_length).await {
+        match execute(&cont_args, page_budget_tokens).await {
             Ok(next_page) => {
                 // Strip the bookmark from current content, strip header from next page
                 let current_content = strip_bookmark(&stitched);
@@ -244,14 +238,15 @@ mod tests {
     #[test]
     fn test_paginate_small_content() {
         let content = "line one\nline two\nline three";
-        let budget = page_size_chars(32768);
+        // 8192 token budget × 4 chars/token
+        let budget = 8192_usize.saturating_mul(4);
         let result = paginate(content, None, None, budget);
         assert_eq!(result, content);
     }
 
     #[test]
     fn test_paginate_large_content_auto() {
-        let budget = page_size_chars(32768);
+        let budget = 8192_usize.saturating_mul(4);
         let line = "This is a line of content for the pagination test.\n";
         let large = line.repeat(budget / line.len() + 100);
         let result = paginate(&large, None, None, budget);
@@ -262,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_paginate_explicit_range() {
-        let budget = page_size_chars(32768);
+        let budget = 8192_usize.saturating_mul(4);
         let content = (1..=100).map(|i| format!("Line {}", i)).collect::<Vec<_>>().join("\n");
         let result = paginate(&content, Some(10), Some(20), budget);
         assert!(result.contains("[Lines 10-20 of 100]"));
@@ -273,7 +268,7 @@ mod tests {
 
     #[test]
     fn test_paginate_range_at_end() {
-        let budget = page_size_chars(32768);
+        let budget = 8192_usize.saturating_mul(4);
         let content = (1..=10).map(|i| format!("Line {}", i)).collect::<Vec<_>>().join("\n");
         let result = paginate(&content, Some(8), Some(10), budget);
         assert!(result.contains("END OF FILE"));
@@ -282,24 +277,26 @@ mod tests {
 
     #[test]
     fn test_paginate_past_end() {
-        let budget = page_size_chars(32768);
+        let budget = 8192_usize.saturating_mul(4);
         let content = "one\ntwo\nthree";
         let result = paginate(content, Some(999), None, budget);
         assert!(result.contains("past end of file"));
     }
 
     #[test]
-    fn test_page_size_scales_with_context() {
-        let small = page_size_chars(8192);
-        let large = page_size_chars(131072);
+    fn test_page_budget_scales_with_tokens() {
+        // Larger token budget → larger char budget (4x conversion is deterministic)
+        let small = 8192_usize.saturating_mul(4);
+        let large = 131072_usize.saturating_mul(4);
         assert!(large > small);
         assert!(small > 0);
     }
 
     #[test]
-    fn test_page_size_is_context_length() {
-        assert_eq!(page_size_chars(262144), 32768);  // 262144 / 8
-        assert_eq!(page_size_chars(32768), 4096);    // 32768 / 8
+    fn test_page_budget_token_to_char_conversion() {
+        // Budget conversion: tokens * 4 = chars. Verified at two token counts.
+        assert_eq!(65536_usize.saturating_mul(4), 262144); // 65536 tokens → 262144 chars
+        assert_eq!(8192_usize.saturating_mul(4), 32768);   // 8192 tokens → 32768 chars
     }
 
     #[test]

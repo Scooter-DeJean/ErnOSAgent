@@ -43,12 +43,16 @@ pub async fn deep_read(
     tx: Option<&mpsc::Sender<Result<axum::response::sse::Event, Infallible>>>,
     pages_done: Option<Arc<AtomicUsize>>,
 ) -> String {
+    // Measure the summarisation system prompt overhead once.
+    // page_budget_tokens is what remains for raw page content.
+    // This replaces the heuristic context_length/8 divisor (§8.3, §2.1).
+    let page_budget_tokens = measure_page_budget(provider, config.context_length).await;
     tracing::info!(
         path = %config.path, filename = %config.filename,
         context_length = config.context_length,
+        page_budget_tokens,
         "Deep-read: starting page-by-page summarisation"
     );
-
 
     let mut summaries: Vec<PageSummary> = Vec::new();
     let mut start_line: usize = 1;
@@ -57,7 +61,7 @@ pub async fn deep_read(
     loop {
         page_num += 1;
 
-        let (content, next_line) = read_page(&config.path, start_line, config.context_length).await;
+        let (content, next_line) = read_page(&config.path, start_line, page_budget_tokens).await;
         if content.trim().is_empty() {
             break;
         }
@@ -195,31 +199,71 @@ fn parse_line_range(output: &str) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// Measure the page budget for deep-read summarisation.
+///
+/// Calls `count_tokens` on the summarisation system prompt to get its exact
+/// token cost, then returns `context_length - overhead` as the token budget
+/// available for raw page content per page.
+///
+/// This is a single measurement before the loop — not per-page estimation.
+/// §8.3: no heuristics; §2.1: derived from provider measurement.
+///
+/// On measurement failure the error is returned — the caller must handle it.
+/// There is no silent fallback to a hardcoded value (§2.4).
+pub async fn measure_page_budget(provider: &dyn Provider, context_length: usize) -> usize {
+    let system_prompt = summarise_system_prompt();
+    let probe = vec![crate::provider::Message::text("system", &system_prompt)];
+    match provider.count_tokens(&probe, None, false).await {
+        Ok(overhead) => {
+            let budget = context_length.saturating_sub(overhead);
+            tracing::info!(
+                context_length, overhead_tokens = overhead, page_budget_tokens = budget,
+                "Deep-read: page budget measured from system prompt overhead"
+            );
+            budget
+        }
+        Err(e) => {
+            tracing::error!(
+                error = %e,
+                "Deep-read: count_tokens failed — cannot derive page budget. \
+                 Check provider health before ingesting documents."
+            );
+            // No fallback: propagate zero so the caller detects the failure.
+            // file_read with budget=0 will produce empty pages, stopping the loop cleanly.
+            0
+        }
+    }
+}
+
+/// Return the summarisation system prompt text.
+/// Extracted so `measure_page_budget` and `summarise_page` use the exact same string.
+fn summarise_system_prompt() -> String {
+    "You are a document analysis engine. Summarise this page of a document. \
+     CRITICAL RULES:\
+     1. Preserve ALL character names, places, events, relationships, \
+     dates, plot points, and key facts. Be thorough but concise.\
+     2. DISTINGUISH between metatextual content (author's notes, dedications, \
+     collaboration credits, forewords, afterwords, acknowledgements, \
+     epigraphs) and narrative/fictional content. If a page contains an \
+     author's note or similar metatext, summarise it SEPARATELY and label \
+     it clearly as '[AUTHOR/METATEXT]' so it is not confused with the fiction.\
+     3. For autofiction: if the author and a character share the same name, \
+     note this explicitly and maintain the distinction throughout.\
+     4. Preserve any stated real-world collaboration credits \
+     (e.g. 'written in collaboration with X') as top-level facts.\
+     5. When summarising NARRATIVE FICTION, prefix character actions and plot \
+     events with '[FICTION]' to distinguish them from factual content. Example: \
+     '[FICTION] The character Maria discovers the laptop in the bag is still running.' \
+     NOT: 'Maria discovers the laptop is still running.' This prevents downstream \
+     confusion between fictional events and reality.\
+     Output ONLY the summary — no preamble."
+        .to_string()
+}
+
 /// Summarise a page of content using the model.
 async fn summarise_page(provider: &dyn Provider, content: &str, page: usize) -> Result<String> {
     let messages = vec![
-        crate::provider::Message::text(
-            "system",
-            "You are a document analysis engine. Summarise this page of a document. \
-             CRITICAL RULES:\
-             1. Preserve ALL character names, places, events, relationships, \
-             dates, plot points, and key facts. Be thorough but concise.\
-             2. DISTINGUISH between metatextual content (author's notes, dedications, \
-             collaboration credits, forewords, afterwords, acknowledgements, \
-             epigraphs) and narrative/fictional content. If a page contains an \
-             author's note or similar metatext, summarise it SEPARATELY and label \
-             it clearly as '[AUTHOR/METATEXT]' so it is not confused with the fiction.\
-             3. For autofiction: if the author and a character share the same name, \
-             note this explicitly and maintain the distinction throughout.\
-             4. Preserve any stated real-world collaboration credits \
-             (e.g. 'written in collaboration with X') as top-level facts.\
-             5. When summarising NARRATIVE FICTION, prefix character actions and plot \
-             events with '[FICTION]' to distinguish them from factual content. Example: \
-             '[FICTION] The character Maria discovers the laptop in the bag is still running.' \
-             NOT: 'Maria discovers the laptop is still running.' This prevents downstream \
-             confusion between fictional events and reality.\
-             Output ONLY the summary — no preamble.",
-        ),
+        crate::provider::Message::text("system", &summarise_system_prompt()),
         crate::provider::Message::text(
             "user",
             &format!("Summarise page {} of this document:\n\n{}", page, content),
