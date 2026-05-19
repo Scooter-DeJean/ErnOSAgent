@@ -22,7 +22,9 @@ pub enum DigestStatus {
     /// Task is running. Stored so duplicate spawns are prevented.
     Pending { started_at: std::time::Instant },
     /// Full deep-read complete. Digest is ready for context injection.
-    Complete { digest: String },
+    /// `session_id` identifies which session produced this digest so the
+    /// context builder can re-inject it on follow-up turns with no attachment.
+    Complete { digest: String, session_id: String },
 }
 
 /// Concurrent map from saved file path → digest status.
@@ -94,7 +96,7 @@ async fn run_background_deep_read(
     // Store digest before generating response — durable even if inference fails (§2.4).
     state.digest_store.insert(
         path_key.clone(),
-        DigestStatus::Complete { digest: digest.clone() },
+        DigestStatus::Complete { digest: digest.clone(), session_id: session_id.clone() },
     );
     tracing::info!(filename = %filename, "Background deep-read: complete — generating response");
 
@@ -110,6 +112,13 @@ async fn run_background_deep_read(
             "Background deep-read: platform delivery failed — digest still cached"
         );
     }
+
+    // Persist Turn 2 response to session history so subsequent user messages
+    // can see that Echo already responded. Without this, the model has no
+    // record of having read the document and will incorrectly claim it can't
+    // access the content when the user follows up.
+    crate::web::ws_learning::ingest_assistant_turn(&state, &response, &session_id).await;
+    tracing::info!(filename = %filename, "Background deep-read: Turn 2 response persisted to session");
 }
 
 /// Build inference context with full digest and run chat_sync to produce the response.
@@ -192,7 +201,10 @@ mod tests {
         let key = "data/uploads/book.md".to_string();
 
         store.insert(key.clone(), DigestStatus::Pending { started_at: std::time::Instant::now() });
-        store.insert(key.clone(), DigestStatus::Complete { digest: "summary text".to_string() });
+        store.insert(key.clone(), DigestStatus::Complete {
+            digest: "summary text".to_string(),
+            session_id: "discord_user_chan".to_string(),
+        });
 
         let entry = store.get(&key).unwrap();
         assert!(matches!(*entry, DigestStatus::Complete { .. }));
@@ -206,7 +218,10 @@ mod tests {
         let store2 = Arc::clone(&store);
 
         store.insert("a".to_string(), DigestStatus::Pending { started_at: std::time::Instant::now() });
-        store2.insert("b".to_string(), DigestStatus::Complete { digest: "d".to_string() });
+        store2.insert("b".to_string(), DigestStatus::Complete {
+            digest: "d".to_string(),
+            session_id: "s1".to_string(),
+        });
 
         assert!(store.contains_key("a"));
         assert!(store.contains_key("b"));

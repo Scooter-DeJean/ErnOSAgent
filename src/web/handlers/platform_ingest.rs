@@ -116,7 +116,7 @@ pub async fn platform_ingest(
 
                     // Path A: Cache hit — full digest already computed. Inject immediately.
                     if let Some(entry) = state.digest_store.get(path) {
-                        if let DigestStatus::Complete { ref digest } = *entry {
+                        if let DigestStatus::Complete { ref digest, .. } = *entry {
                             tracing::info!(filename = %att.filename, "Deep-read gate: cache hit — using stored digest");
                             deep_read_digests.push((att.filename.clone(), digest.clone()));
                             continue;
@@ -153,6 +153,32 @@ pub async fn platform_ingest(
                 }
             }
         }
+    }
+
+    // Inject any complete digests for this session not already provided via attachment.
+    // This covers follow-up messages (no attachment) after Turn 2 has already fired,
+    // ensuring the model retains document context across the full conversation.
+    {
+        use crate::web::handlers::background_digest::DigestStatus;
+        let already_injected: std::collections::HashSet<String> =
+            deep_read_digests.iter().map(|(f, _)| f.clone()).collect();
+        let mut to_inject: Vec<(String, String)> = Vec::new();
+        for entry in state.digest_store.iter() {
+            if let DigestStatus::Complete { ref digest, session_id: ref entry_session } = *entry.value() {
+                if entry_session == &session_id && !already_injected.contains(entry.key().as_str()) {
+                    let filename = std::path::Path::new(entry.key())
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or(entry.key());
+                    tracing::info!(
+                        filename, session = %session_id,
+                        "Context builder: injecting cached digest for follow-up turn"
+                    );
+                    to_inject.push((filename.to_string(), digest.clone()));
+                }
+            }
+        }
+        deep_read_digests.extend(to_inject);
     }
 
     // Build the final content: user message + attachments.
