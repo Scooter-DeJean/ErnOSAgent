@@ -37,6 +37,9 @@ pub struct HudContext {
     pub timeline_narrative: String,
     pub user_preferences: Option<String>,
     pub scheduler_status: String,
+    /// Number of times context has been consolidated this session.
+    /// Non-zero = model must use session_recall/memory before claiming data is absent.
+    pub consolidation_count: usize,
 }
 
 /// Build the dynamic HUD string from live system state.
@@ -55,6 +58,7 @@ pub fn build_hud(ctx: &HudContext) -> String {
     hud.push_str(&format_log_section(&ctx.system_log_tail));
     hud.push_str(&format_timeline_section(&ctx.timeline_narrative));
     hud.push_str(&format_preferences_section(&ctx.user_preferences));
+    hud.push_str(&format_consolidation_notice(ctx.consolidation_count));
 
     if let Some(ref stack) = ctx.conversation_stack {
         let section = stack.to_hud_section();
@@ -190,6 +194,24 @@ fn format_preferences_section(prefs: &Option<String>) -> String {
     }
 }
 
+/// PR8: Consolidation notice — alerts the model that history has been compressed.
+/// When consolidation_count > 0, instructs the model to use memory tools before
+/// claiming that information is absent from memory.
+fn format_consolidation_notice(count: usize) -> String {
+    if count == 0 { return String::new(); }
+    format!(
+        "\n\n## [CONTEXT COMPRESSED] — {} consolidation(s) this session\n\
+         Earlier conversation history has been compressed and sorted into memory. \
+         If a user asks about something that happened earlier or claims you should \
+         know a fact, ALWAYS search memory first before concluding data is absent:\n\
+         - `synaptic(action='search', concept='...')` — search the knowledge graph\n\
+         - `scratchpad(action='list')` — check pinned facts\n\
+         - `memory(action='recall', query='...')` — full memory recall\n\
+         - `session_recall(action='list')` — browse compressed session history",
+        count
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +249,7 @@ mod tests {
             timeline_narrative: String::new(),
             user_preferences: None,
             scheduler_status: "No jobs configured".to_string(),
+            consolidation_count: 0,
         }
     }
 
