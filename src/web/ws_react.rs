@@ -307,7 +307,7 @@ async fn handle_single_tool(
     track_spiral(ls, &tc.name, &result);
     ctx.add_tool_result(tc, result);
     crate::web::handlers::platform_context::enforce_context_budget(
-        provider, &mut ctx.messages, None, state.model_spec.context_length, true,
+        provider, &mut ctx.messages, None, state.model_spec.context_length, true, &state.config.context,
     ).await;
     emit_auto_verify_hint(ctx, &tc.name);
     ls.remaining_turns = ls.remaining_turns.saturating_sub(1);
@@ -362,7 +362,7 @@ async fn handle_parallel_tools(
     let pairs: Vec<_> = tcs.iter().zip(results.into_iter()).collect();
     ctx.add_tool_results(pairs);
     crate::web::handlers::platform_context::enforce_context_budget(
-        provider, &mut ctx.messages, None, state.model_spec.context_length, true,
+        provider, &mut ctx.messages, None, state.model_spec.context_length, true, &state.config.context,
     ).await;
     ls.remaining_turns = ls.remaining_turns.saturating_sub(1);
     ls.total_iterations += 1;

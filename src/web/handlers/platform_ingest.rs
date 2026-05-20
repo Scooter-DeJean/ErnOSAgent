@@ -543,7 +543,7 @@ fn retry_after_rejection<'a>(
 
         messages.push(crate::provider::Message::text("assistant", rejected_text));
         messages.push(crate::provider::Message::text("system", &feedback));
-        super::platform_exec::enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, true).await;
+        super::platform_exec::enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, true, &state.config.context).await;
 
         if let Ok(rx) = provider.chat(messages, Some(tools), true).await {
             use crate::inference::stream_consumer::{self as sc, NullSink};

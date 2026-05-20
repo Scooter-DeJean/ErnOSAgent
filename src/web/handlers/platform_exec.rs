@@ -124,7 +124,8 @@ pub async fn run_platform_tool_chain(
             context_length = state.model_spec.context_length,
             "Tool chain: context state before budget enforcement"
         );
-        enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, false).await;
+        enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, false, &state.config.context).await;
+
 
         // Pre-infer budget check — uses real tokenizer to validate post-trim state.
         // Per §2.4: if tokenizer is unreachable, skip this check (fail-open to off).
@@ -331,7 +332,8 @@ async fn handle_react_tool(
 
     tool_events.push(event);
     append_tool_messages(messages, tc, &result);
-    enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, true).await;
+    enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length, true, &state.config.context).await;
+
 
     // Exit if context is at or above 90% capacity — mirrors the L1 tool chain budget check.
     // Uses provider.count_tokens() — no heuristics (§2.1, §8.3).

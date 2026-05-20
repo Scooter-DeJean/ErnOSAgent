@@ -121,7 +121,7 @@ pub async fn run_l1_tool_chain(
             messages.push(Message::tool_result_multipart(&current_tc.id, &result.output, result.images));
         }
         crate::web::handlers::platform_context::enforce_context_budget(
-            provider, messages, Some(tools), state.model_spec.context_length, false,
+            provider, messages, Some(tools), state.model_spec.context_length, false, &state.config.context,
         ).await;
 
         // thinking=false: the model already reasoned during initial inference.

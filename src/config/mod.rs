@@ -32,6 +32,10 @@ pub struct AppConfig {
     pub discord: DiscordConfig,
     #[serde(default)]
     pub telegram: TelegramConfig,
+    /// Context compression/consolidation thresholds.
+    /// Configure in [context] section of ern-os.toml.
+    #[serde(default)]
+    pub context: ContextConfig,
     /// Mesh network configuration — parsed by ern-mesh crate.
     /// Optional: existing configs without [mesh] continue to work.
     #[serde(default)]
@@ -238,6 +242,47 @@ impl Default for CodesConfig {
     }
 }
 
+/// Context compression and consolidation thresholds.
+/// All values are configurable from ern-os.toml under [context].
+/// Defaults match previous hardcoded values for backwards compatibility.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextConfig {
+    /// Token usage % at which Layer 2 progressive trim fires. Default: 0.60
+    pub trim_threshold: f64,
+    /// Token usage % at which Layer 1 LLM consolidation fires. Default: 0.80
+    pub consolidation_threshold: f64,
+    /// Messages to keep verbatim during progressive trim. Default: 10
+    pub trim_keep_recent: usize,
+    /// Chars above which an old tool result is trimmed in Layer 2. Default: 500
+    pub trim_tool_result_chars: usize,
+    /// Chars above which enforce_context_budget compresses a tool result. Default: 8000
+    pub compress_threshold_chars: usize,
+    /// Chars to keep from the head of a compressed tool result. Default: 2000
+    pub compress_head_chars: usize,
+    /// Chars to keep from the tail of a compressed tool result. Default: 2000
+    pub compress_tail_chars: usize,
+    /// Fraction of history sorted+summarised when over threshold (oldest N%). Default: 0.60
+    pub consolidation_split_ratio: f64,
+    /// Max tool calls the memory sort pass may make before being cut off. Default: 20
+    pub sort_pass_tool_call_limit: usize,
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            trim_threshold: 0.60,
+            consolidation_threshold: 0.80,
+            trim_keep_recent: 10,
+            trim_tool_result_chars: 500,
+            compress_threshold_chars: 8000,
+            compress_head_chars: 2000,
+            compress_tail_chars: 2000,
+            consolidation_split_ratio: 0.60,
+            sort_pass_tool_call_limit: 20,
+        }
+    }
+}
+
 /// Browser tool configuration — controls headed/headless mode and viewport.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BrowserConfig {
@@ -378,6 +423,7 @@ impl Default for AppConfig {
             browser: BrowserConfig::default(),
             discord: DiscordConfig::default(),
             telegram: TelegramConfig::default(),
+            context: ContextConfig::default(),
             mesh: None,
         }
     }

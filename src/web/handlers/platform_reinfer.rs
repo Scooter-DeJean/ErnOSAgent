@@ -168,7 +168,7 @@ async fn handle_empty_response(
         context_length = state.model_spec.context_length,
         "Model returned empty response after tool execution — trimming and retrying"
     );
-    enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length / 2, false).await;
+    enforce_context_budget(provider, messages, Some(tools), state.model_spec.context_length / 2, false, &state.config.context).await;
 
     // Inject recovery prompt to escape KV cache collision.
     // Without this, the retry hits the same cached state and produces
