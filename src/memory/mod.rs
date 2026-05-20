@@ -93,26 +93,30 @@ impl MemoryManager {
     /// When `project_id` is Some, uses project-mode budget allocation
     /// (40% bible, 25% documents) and filters to that project's data.
     /// When None, uses global allocation (30% scratchpad, 15% documents).
-    pub fn recall_context(&self, _query: &str, budget_tokens: usize, query_embedding: Option<&[f32]>, project_id: Option<&str>) -> String {
-        let total_chars = budget_tokens * 4; // ~4 chars per token
+    pub fn recall_context(
+        &self, query: &str, budget_tokens: usize,
+        query_embedding: Option<&[f32]>, project_id: Option<&str>,
+    ) -> String {
+        // budget_tokens * 4 converts to an approximate byte budget.
+        // This is used only for section sizing — not for any inference decision.
+        // Actual context usage is always measured via count_tokens.
+        let total_bytes = budget_tokens * 4;
         let mut parts = Vec::new();
 
         if project_id.is_some() {
-            // Project mode: prioritise bible + manuscript chunks
-            if let Some(s) = self.recall_scratchpad_project(total_chars * 40 / 100, project_id.unwrap()) { parts.push(s); }
-            if let Some(s) = self.recall_documents_project(total_chars * 25 / 100, query_embedding, project_id.unwrap()) { parts.push(s); }
-            if let Some(s) = self.recall_lessons(total_chars * 10 / 100) { parts.push(s); }
-            if let Some(s) = self.recall_timeline(total_chars * 10 / 100) { parts.push(s); }
-            if let Some(s) = self.recall_procedures(total_chars * 10 / 100) { parts.push(s); }
-            if let Some(s) = self.recall_knowledge_graph() { parts.push(s); }
+            if let Some(s) = self.recall_scratchpad_project(total_bytes * 40 / 100, project_id.unwrap()) { parts.push(s); }
+            if let Some(s) = self.recall_documents_project(total_bytes * 25 / 100, query_embedding, project_id.unwrap()) { parts.push(s); }
+            if let Some(s) = self.recall_lessons(total_bytes * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_timeline(total_bytes * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_procedures(total_bytes * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_knowledge_graph(query, total_bytes * 5 / 100) { parts.push(s); }
         } else {
-            // Global mode: original allocation
-            if let Some(s) = self.recall_scratchpad(total_chars * 30 / 100) { parts.push(s); }
-            if let Some(s) = self.recall_lessons(total_chars * 20 / 100) { parts.push(s); }
-            if let Some(s) = self.recall_documents(total_chars * 15 / 100, query_embedding) { parts.push(s); }
-            if let Some(s) = self.recall_procedures(total_chars * 15 / 100) { parts.push(s); }
-            if let Some(s) = self.recall_timeline(total_chars * 10 / 100) { parts.push(s); }
-            if let Some(s) = self.recall_knowledge_graph() { parts.push(s); }
+            if let Some(s) = self.recall_scratchpad(total_bytes * 30 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_lessons(total_bytes * 20 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_documents(total_bytes * 15 / 100, query_embedding) { parts.push(s); }
+            if let Some(s) = self.recall_procedures(total_bytes * 15 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_timeline(total_bytes * 10 / 100) { parts.push(s); }
+            if let Some(s) = self.recall_knowledge_graph(query, total_bytes * 10 / 100) { parts.push(s); }
         }
 
         parts.join("\n")
@@ -155,12 +159,30 @@ impl MemoryManager {
         Some(section)
     }
 
-    fn recall_knowledge_graph(&self) -> Option<String> {
-        let nodes = self.synaptic.recent_nodes(5);
+    /// Query-aware knowledge graph recall.
+    /// Searches by query first, falls back to recency.
+    /// Injects full data fields — not just node IDs — so the model
+    /// can see relationships, pet names, preferences, and personal facts.
+    fn recall_knowledge_graph(&self, query: &str, budget: usize) -> Option<String> {
+        let nodes = if query.is_empty() {
+            self.synaptic.recent_nodes(20)
+        } else {
+            let hits = self.synaptic.search_nodes(query, 20);
+            if hits.is_empty() { self.synaptic.recent_nodes(20) } else { hits }
+        };
         if nodes.is_empty() { return None; }
         let mut section = String::from("[Memory — Knowledge Graph]\n");
         for n in &nodes {
-            section.push_str(&format!("• {} [{}]\n", n.id, n.layer));
+            let data_str: String = n.data.iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<_>>().join(", ");
+            let line = if data_str.is_empty() {
+                format!("• {} [{}]\n", n.id, n.layer)
+            } else {
+                format!("• {} [{}] — {}\n", n.id, n.layer, data_str)
+            };
+            if section.len() + line.len() > budget { break; }
+            section.push_str(&line);
         }
         Some(section)
     }
