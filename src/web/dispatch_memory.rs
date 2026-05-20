@@ -203,10 +203,51 @@ fn timeline_search(memory: &crate::memory::MemoryManager, args: &serde_json::Val
     let entries = memory.timeline.search(q, 100);
     if entries.is_empty() { return Ok(format!("No matches for '{}'", q)); }
     let items: Vec<String> = entries.iter()
-        .map(|e| format!("[{}] {}", e.timestamp.format("%Y-%m-%d %H:%M"), e.transcript))
+        .map(|e| {
+            let context = extract_match_context(&e.transcript, q);
+            format!("[{}] [session:{}] ...{}...",
+                e.timestamp.format("%Y-%m-%d %H:%M"),
+                &e.session_id,
+                context,
+            )
+        })
         .collect();
     Ok(paginate(&items, get_page(args), get_per_page(args)))
 }
+
+/// Extract text surrounding the first occurrence of `query` in `text`.
+/// Returns the matched line with 2 lines of context above and below (grep -C 2 style).
+/// Context window is derived from the match position and the text's own line structure.
+fn extract_match_context(text: &str, query: &str) -> String {
+    let lower = text.to_lowercase();
+    let q_lower = query.to_lowercase();
+    let match_pos = match lower.find(&q_lower) {
+        Some(pos) => pos,
+        None => {
+            // Shouldn't happen — caller already filtered. Return first few lines.
+            let lines: Vec<&str> = text.lines().take(3).collect();
+            return lines.join("\n");
+        }
+    };
+
+    // Find the line containing the match.
+    let lines: Vec<&str> = text.lines().collect();
+    let mut byte_offset = 0;
+    let mut match_line_idx = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if byte_offset + line.len() >= match_pos {
+            match_line_idx = i;
+            break;
+        }
+        byte_offset += line.len() + 1; // +1 for newline
+    }
+
+    // Include 2 lines before and 2 lines after the match line.
+    let start = match_line_idx.saturating_sub(2);
+    let end = (match_line_idx + 3).min(lines.len());
+    lines[start..end].join("\n")
+}
+
 
 fn timeline_session(memory: &crate::memory::MemoryManager, args: &serde_json::Value) -> anyhow::Result<String> {
     let sid = args["session_id"].as_str().unwrap_or("");
