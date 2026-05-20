@@ -260,6 +260,19 @@ pub fn platform_safe_tools() -> serde_json::Value {
 use crate::tools::schema_definitions::*;
 use crate::tools::schema_definitions_ext::*;
 
+/// Build the restricted tool schema for the pre-consolidation memory sort pass.
+/// The model must only call memory-write tools during sorting.
+/// reply_request signals completion. No read/write/shell/web tools permitted.
+pub fn memory_sort_tools() -> serde_json::Value {
+    serde_json::json!([
+        synaptic_tool_schema(),
+        scratchpad_tool_schema(),
+        lessons_tool_schema(),
+        self_skills_tool_schema(),
+        reply_request_tool(),
+    ])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -54,11 +54,15 @@ impl ConsolidationEngine {
         usage_pct >= threshold
     }
 
-    pub fn split_for_consolidation(&self, messages: &[Message]) -> (Vec<Message>, Vec<Message>) {
+    /// Split session history for consolidation using the configured split ratio.
+    /// Returns (old_messages_to_consolidate, recent_messages_to_keep).
+    pub fn split_for_consolidation(
+        &self, messages: &[Message], split_ratio: f64,
+    ) -> (Vec<Message>, Vec<Message>) {
         if messages.len() <= 2 {
             return (Vec::new(), messages.to_vec());
         }
-        let split = (messages.len() as f64 * 0.6) as usize;
+        let split = ((messages.len() as f64) * split_ratio) as usize;
         let split = split.max(1);
         (messages[..split].to_vec(), messages[split..].to_vec())
     }
@@ -72,6 +76,8 @@ impl ConsolidationEngine {
             timestamp: chrono::Utc::now(),
             messages_consolidated: count,
             summary: summary.to_string(),
+            // NOTE: these are char-based estimates stored for audit trail only.
+            // They are not used for any decisions — thresholds use count_tokens.
             original_token_estimate: original_chars / 4,
             summary_token_estimate: summary.len() / 4,
         });
@@ -87,6 +93,34 @@ impl ConsolidationEngine {
     }
 
     pub fn consolidation_count(&self) -> usize { self.records.len() }
+}
+
+/// Build the system prompt for the memory sorting inference pass.
+/// Injected into digest_provider (slot 1) before consolidation fires.
+/// The model reads the old messages and sorts everything into permanent tiers.
+pub fn pre_consolidation_sort_prompt(message_count: usize) -> String {
+    format!(
+        "You are performing a MEMORY CONSOLIDATION SORT. \
+         You have been given {message_count} messages that are about to be \
+         compressed and their verbatim content will be permanently lost. \
+         Your job is to read every message and use your tools to store \
+         everything that matters before it is discarded.\n\n\
+         REQUIRED ACTIONS — you MUST call tools to store:\n\
+         • synaptic(action='store') — every person, place, entity, fact, \
+           preference, and relationship mentioned. Include ALL personal data: \
+           names, relationships (fiancé, partner, family), pets and their names, \
+           preferences, dates, locations, project names.\n\
+         • synaptic(action='store_relationship') — every relationship between entities.\n\
+         • scratchpad(action='pin') — any important standing fact, user preference, \
+           or recurring context that should be immediately visible in future sessions.\n\
+         • lessons(action='add') — any rule, pattern, or lesson about how to \
+           work with this user or handle similar situations.\n\
+         • self_skills — any reusable workflow or procedure that was discovered.\n\n\
+         Work systematically through all {message_count} messages. When you have stored \
+         everything important, call reply_request with a brief summary of what you stored. \
+         Do NOT output text before finishing all tool calls. Sort first, then reply.",
+        message_count = message_count
+    )
 }
 
 #[cfg(test)]
