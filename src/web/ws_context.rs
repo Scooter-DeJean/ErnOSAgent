@@ -58,6 +58,10 @@ pub async fn build_chat_context(
 
     let golden_count = state.golden_buffer.read().await.count();
     let rejection_count = state.rejection_buffer.read().await.count();
+    let consolidation_count = {
+        let memory = state.memory.read().await;
+        memory.consolidation.consolidation_count()
+    };
 
     // ── Load conversation stack (generated retroactively by observer audit) ──
     let conversation_stack = {
@@ -77,7 +81,7 @@ pub async fn build_chat_context(
 
     // ── Phase 3: Pre-HUD context usage estimate ──
     let history_chars: usize = session_history.iter().map(|m| m.text_content().len()).sum();
-    let est_tokens = (history_chars + content.len() + tools_chars) / 3; // Conservative BPE estimate
+    let est_tokens = (history_chars + content.len() + tools_chars) / 4;
     let context_usage_pct = est_tokens as f32 / state.model_spec.context_length.max(1) as f32;
 
     // ── Phase 5: System log tail (WARN/ERROR only) ──
@@ -130,6 +134,7 @@ pub async fn build_chat_context(
         timeline_narrative: hud_data.4,
         user_preferences,
         scheduler_status,
+        consolidation_count,
     });
 
     let system_prompt = crate::prompt::assemble(&core_prompt, &identity_prompt, &memory_context, &hud);
@@ -211,11 +216,29 @@ async fn consolidate_if_needed(
 ) -> Vec<Message> {
     let context_length = state.model_spec.context_length;
 
-    // Use the provider's tokenizer for exact token count (§2.1 — no heuristics)
+    // Fast path: if char-estimated tokens are well below trim threshold, skip count_tokens.
+    // This is a gate (same pattern as enforce_context_budget:42-51), not a measurement.
+    // The real count_tokens fires when context is near threshold.
+    let total_chars: usize = session_history.iter().map(|m| m.text_content().len()).sum::<usize>()
+        + system_prompt.len() + content.len();
+    let tools_json = crate::tools::schema::layer1_tools();
+    let tool_chars = tools_json.to_string().len();
+    let char_estimated_tokens = (total_chars + tool_chars) / 4;
+    let trim_budget = (context_length as f64 * state.config.context.trim_threshold) as usize;
+
+    if char_estimated_tokens < trim_budget {
+        tracing::debug!(
+            char_estimated_tokens,
+            trim_budget,
+            "Consolidation fast-path: provably under threshold — skipping count_tokens"
+        );
+        return session_history;
+    }
+
+    // Near or over threshold — measure exactly via server tokenizer.
     let mut temp_messages = session_history.clone();
     temp_messages.push(Message::text("system", system_prompt));
     temp_messages.push(Message::text("user", content));
-    let tools_json = crate::tools::schema::layer1_tools();
     let estimated_tokens = match state.provider.count_tokens(&temp_messages, Some(&tools_json), state.config.prompt.thinking_enabled).await {
         Ok(t) => t,
         Err(e) => {
@@ -236,34 +259,54 @@ async fn consolidate_if_needed(
         "Context usage accounting (server-side tokenization)"
     );
 
-    if usage_pct < 0.60 {
+    if usage_pct < state.config.context.trim_threshold as f32 {
         return session_history;
     }
 
-    // ── Stage 1: Progressive trim at 60-80% — compress verbose tool results ──
-    if usage_pct < 0.80 {
+    // ── Stage 1: Progressive trim at trim–consolidation% — compress verbose tool results ──
+    if usage_pct < state.config.context.consolidation_threshold as f32 {
         tracing::info!(
             usage_pct = format!("{:.0}%", usage_pct * 100.0),
-            "Context at 60-80% — progressive trimming tool results"
+            "Context at trim threshold — progressive trimming tool results"
         );
-        return trim_verbose_tool_results(session_history);
+        return trim_verbose_tool_results(
+            session_history,
+            state.config.context.trim_keep_recent,
+            state.config.context.trim_tool_result_chars,
+        );
     }
 
     tracing::info!(
         usage_pct = format!("{:.0}%", usage_pct * 100.0),
         history_msgs = session_history.len(),
-        "Context usage above 80% — triggering LLM consolidation"
+        "Context usage above consolidation threshold — triggering memory sort + LLM consolidation"
     );
 
     let (old_messages, recent_messages) = {
         let memory = state.memory.read().await;
-        memory.consolidation.split_for_consolidation(&session_history)
+        memory.consolidation.split_for_consolidation(
+            &session_history,
+            state.config.context.consolidation_split_ratio,
+        )
     };
 
     if old_messages.is_empty() {
         return session_history;
     }
 
+    // ── Step 1: Model sorts old messages into memory tiers before discarding ──
+    // Uses digest_provider (slot 1) — does not block slot 0 inference.
+    // §2.4: if sort fails, abort consolidation — keep full history, discard nothing.
+    if let Err(e) = run_memory_sort_pass(state, &old_messages).await {
+        tracing::error!(
+            error = %e,
+            msgs = old_messages.len(),
+            "Memory sort pass failed — consolidation aborted, keeping full history"
+        );
+        return session_history;
+    }
+
+    // ── Step 2: LLM summarisation (slot 1) — runs AFTER memory is safe ──
     let old_text: String = old_messages.iter()
         .map(|m| format!("{}: {}", m.role, m.text_content()))
         .collect::<Vec<_>>().join("\n");
@@ -282,7 +325,7 @@ async fn consolidate_if_needed(
         )),
     ];
 
-    let summary = match state.provider.chat_sync(&summary_prompt, None).await {
+    let summary = match state.digest_provider.chat_sync(&summary_prompt, None).await {
         Ok(s) => {
             tracing::info!(input_chars = old_text.len(), summary_chars = s.len(), "LLM consolidation generated");
             s
@@ -309,28 +352,123 @@ async fn consolidate_if_needed(
     working_history
 }
 
-/// Progressive condensation: trim verbose tool results to reduce context usage.
-/// Keeps the last 10 messages intact, trims older tool results to 500 chars.
-fn trim_verbose_tool_results(history: Vec<Message>) -> Vec<Message> {
-    let keep_recent = 10;
-    let len = history.len();
+/// Run the model-driven memory sorting inference pass over old_messages.
+/// The model issues tool calls sorting entities, relationships, lessons, and
+/// pinned facts into the correct memory tiers before they are discarded.
+/// Uses digest_provider (slot 1) to avoid blocking slot 0 inference.
+/// Returns Err only on total failure — partial tool call success is acceptable.
+async fn run_memory_sort_pass(state: &AppState, old_messages: &[Message]) -> anyhow::Result<()> {
+    use crate::inference::react_loop::{ReactContext, run_iteration};
+    use crate::inference::react_loop::IterationResult;
 
+    let sort_prompt = crate::memory::consolidation::pre_consolidation_sort_prompt(old_messages.len());
+    let old_text: String = old_messages.iter()
+        .map(|m| format!("{}: {}", m.role, m.text_content()))
+        .collect::<Vec<_>>().join("\n");
+
+    let base = vec![
+        Message::text("system", &sort_prompt),
+        Message::text("user", &format!(
+            "Here are the {} messages to sort into memory before they are lost:\n\n{}",
+            old_messages.len(), old_text
+        )),
+    ];
+
+    let limit = state.config.context.sort_pass_tool_call_limit;
+    let mut calls_made = 0usize;
+
+    // Build a ReactContext for the memory-sort pass.
+    // run_iteration uses layer2_tools internally which includes all memory tools.
+    let mut ctx = ReactContext::new(
+        "Sort old conversation messages into memory tiers before consolidation.",
+        None,
+        base,
+    );
+
+    loop {
+        if calls_made >= limit {
+            tracing::warn!(calls_made, limit, "Memory sort pass hit tool call limit");
+            break;
+        }
+
+        match run_iteration(state.digest_provider.as_ref(), &ctx, false).await {
+            Ok(IterationResult::Reply(text, _)) | Ok(IterationResult::ImplicitReply(text, _)) => {
+                tracing::info!(calls_made, summary = %text.chars().take(200).collect::<String>(), "Memory sort pass complete");
+                break;
+            }
+            Ok(IterationResult::Refuse(reason)) => {
+                tracing::warn!(reason = %reason, "Memory sort pass refused — treating as complete");
+                break;
+            }
+            Ok(IterationResult::ToolCall(tc)) => {
+                if tc.name == "reply_request" {
+                    tracing::info!(calls_made, "Memory sort pass: reply_request");
+                    break;
+                }
+                let result = crate::web::tool_dispatch::execute_tool_with_state(state, &tc).await;
+                tracing::debug!(tool = %tc.name, output = %result.output.chars().take(120).collect::<String>(), "Sort pass tool executed");
+                ctx.add_tool_result(&tc, result);
+                calls_made += 1;
+            }
+            Ok(IterationResult::ToolCalls(tcs)) => {
+                for tc in &tcs {
+                    if tc.name == "reply_request" {
+                        tracing::info!(calls_made, "Memory sort pass: reply_request in batch");
+                        return Ok(());
+                    }
+                    let result = crate::web::tool_dispatch::execute_tool_with_state(state, tc).await;
+                    tracing::debug!(tool = %tc.name, "Sort pass batch tool executed");
+                    ctx.add_tool_result(tc, result);
+                    calls_made += 1;
+                }
+            }
+            Ok(IterationResult::ExtendTurns { .. }) => {
+                // Not applicable in sort pass — treat as done
+                tracing::info!("Memory sort pass: extend_turns received — treating as done");
+                break;
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Memory sort pass inference failed: {}", e));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Trim verbose tool results with lossless bookmarks (PR5).
+/// Keeps `keep_recent` messages verbatim. Trims older tool results
+/// to `trim_chars` with a [BOOKMARK] for recovery via file_read.
+fn trim_verbose_tool_results(
+    history: Vec<Message>,
+    keep_recent: usize,
+    trim_chars: usize,
+) -> Vec<Message> {
+    let len = history.len();
     if len <= keep_recent {
         return history;
     }
-
     let boundary = len - keep_recent;
     let mut trimmed = Vec::with_capacity(len);
-
     for (i, msg) in history.into_iter().enumerate() {
         if i < boundary && msg.role == "tool" {
             let text = msg.text_content();
-            if text.len() > 500 {
-                let b = text.char_indices().take_while(|(i,_)| *i <= 500).last().map(|(i,_)| i).unwrap_or(0);
-                let truncated = format!("{}... [trimmed {}/{} chars]", &text[..b], b, text.len());
+            if text.len() > trim_chars {
+                let cut = text.char_indices()
+                    .take_while(|(idx, _)| *idx <= trim_chars)
+                    .last()
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(trim_chars.min(text.len()));
+                let shown_lines = text[..cut].lines().count();
+                let total_lines = text.lines().count();
+                let new_content = format!(
+                    "{}\n[TRIMMED — {}/{} chars shown, {} total lines. \
+                     BOOKMARK: use file_read start_line={} to recover remaining content]",
+                    &text[..cut], cut, text.len(), total_lines, shown_lines + 1
+                );
                 trimmed.push(Message::tool_result(
                     msg.tool_call_id.as_deref().unwrap_or(""),
-                    &truncated,
+                    &new_content,
                 ));
                 continue;
             }
@@ -339,4 +477,3 @@ fn trim_verbose_tool_results(history: Vec<Message>) -> Vec<Message> {
     }
     trimmed
 }
-
