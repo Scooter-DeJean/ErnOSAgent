@@ -29,10 +29,10 @@ pub async fn enforce_context_budget(
     tools: Option<&serde_json::Value>,
     context_length: usize,
     thinking: bool,
+    compress_cfg: &crate::config::ContextConfig,
 ) {
-    // Context budget ratio: reserves 40% of context for generation tokens.
-    const CONTEXT_BUDGET_RATIO: f64 = 0.60;
-    let budget = (context_length as f64 * CONTEXT_BUDGET_RATIO) as usize;
+    // Context budget ratio: reserves space for generation tokens.
+    let budget = (context_length as f64 * compress_cfg.trim_threshold) as usize;
 
     // Fast path: estimate token count from total char length before calling count_tokens.
     // English prose averages ~4 chars/token for BPE models. This is a GATE —
@@ -64,16 +64,17 @@ pub async fn enforce_context_budget(
         return;
     }
 
+    let overshoot = token_count - budget;
     tracing::warn!(
         token_count,
         budget,
         context_length,
-        overshoot = token_count - budget,
-        "Context budget exceeded (60% margin) — trimming tool results"
+        overshoot,
+        "Context budget exceeded — trimming tool results"
     );
 
     let tool_indices = find_trim_candidates(messages);
-    let trimmed_total = trim_tool_messages(provider, messages, tools, &tool_indices, budget, thinking).await;
+    let trimmed_total = trim_tool_messages(messages, &tool_indices, overshoot, compress_cfg);
 
     let final_tokens = provider.count_tokens(messages, tools, thinking).await.unwrap_or(0);
     tracing::warn!(
@@ -93,54 +94,54 @@ fn find_trim_candidates(messages: &[crate::provider::Message]) -> Vec<usize> {
         .collect()
 }
 
-/// Trim tool messages from oldest to newest until context fits.
-/// Uses `provider.count_tokens()` after each compression to measure real impact.
-async fn trim_tool_messages(
-    provider: &dyn crate::provider::Provider,
+/// Trim tool messages from oldest to newest until estimated chars removed covers the overshoot.
+/// Uses char-based accounting as a gate — the caller's post-trim `count_tokens` call provides
+/// the authoritative measurement. This matches the gate pattern at `enforce_context_budget:42-51`.
+fn trim_tool_messages(
     messages: &mut Vec<crate::provider::Message>,
-    tools: Option<&serde_json::Value>,
     tool_indices: &[usize],
-    budget: usize,
-    thinking: bool,
+    overshoot: usize,
+    compress_cfg: &crate::config::ContextConfig,
 ) -> usize {
-    let mut trimmed_total = 0usize;
+    let mut chars_removed = 0usize;
+    // Conservative: 4 chars/token. Stop when we've removed enough chars to
+    // cover the token overshoot. The post-trim count_tokens validates.
+    let target_chars = overshoot * 4;
 
     for &idx in tool_indices {
-        let current_tokens = match provider.count_tokens(messages, tools, thinking).await {
-            Ok(count) => count,
-            Err(_) => break, // Tokenizer unreachable — stop trimming (fail-open)
-        };
-        if current_tokens <= budget {
+        if chars_removed >= target_chars {
             break;
         }
 
         let content = messages[idx].text_content();
         let content_len = content.len();
-        let overshoot = current_tokens - budget;
 
-        // For older tool results (not the last one), compress
         if idx != *tool_indices.last().unwrap_or(&usize::MAX) {
-            let compressed = compress_tool_result(&content);
+            let compressed = compress_tool_result(&content, compress_cfg);
             let saved = content_len.saturating_sub(compressed.len());
             messages[idx].content = serde_json::Value::String(compressed);
-            trimmed_total += saved;
+            chars_removed += saved;
             tracing::info!(idx, content_len, compressed_len = content_len - saved, "Compressed old tool result");
             continue;
         }
 
-        // For the most recent tool result, trim proportionally to overshoot.
-        // overshoot is in tokens; approximate chars to remove as overshoot * 4
-        // (inverse of typical BPE ratio). The next loop iteration re-measures.
-        let trim_chars = overshoot * 4;
-        let keep = if content_len > trim_chars + 500 {
-            content_len - trim_chars
+        // Latest tool result — trim with bookmark.
+        let keep = if content_len > target_chars.saturating_sub(chars_removed) + 500 {
+            content_len - (target_chars.saturating_sub(chars_removed))
         } else {
-            // Tool result is larger than can fit — keep only what the
-            // remaining budget can hold. budget is in tokens; * 4 converts
-            // to approximate chars.
-            let remaining_budget_chars = budget.saturating_sub(overshoot.min(budget)) * 4;
-            remaining_budget_chars.min(content_len).max(200)
+            // Extreme overshoot — keep minimal content.
+            let remaining = target_chars.saturating_sub(chars_removed);
+            content_len.saturating_sub(remaining).min(content_len)
         };
+        let keep = keep.min(content_len);
+        if keep == 0 {
+            messages[idx].content = serde_json::Value::String(
+                "[Tool result trimmed — context budget exhausted. Use file_read to retrieve.]".to_string()
+            );
+            chars_removed += content_len;
+            tracing::info!(idx, content_len, "Trimmed tool result entirely");
+            continue;
+        }
         let truncated = match content[..keep].rfind('\n') {
             Some(pos) => &content[..pos],
             None => &content[..keep],
@@ -151,36 +152,33 @@ async fn trim_tool_messages(
             "[Lines 1-{} of {} — trimmed to fit context window]\n{}\n\n[BOOKMARK: line {} — use file_read with start_line={} to continue]",
             shown_lines, total_lines, truncated, shown_lines + 1, shown_lines + 1
         );
-        trimmed_total += content_len - new_content.len();
+        chars_removed += content_len - new_content.len();
         messages[idx].content = serde_json::Value::String(new_content);
         tracing::info!(idx, shown_lines, total_lines, "Trimmed latest tool result with bookmark");
     }
 
-    trimmed_total
+    chars_removed
 }
+
 
 /// Maximum characters before a tool result is compressed.
 /// Below this threshold, the full result is returned as-is.
-const COMPRESS_THRESHOLD_CHARS: usize = 8000;
-
-/// Characters to keep from the head and tail of a compressed tool result.
-const COMPRESS_HEAD_CHARS: usize = 2000;
-const COMPRESS_TAIL_CHARS: usize = 2000;
+/// Value comes from ContextConfig.compress_threshold_chars.
 
 /// Compress a tool result to preserve key content while reducing size.
 /// Keeps pagination markers, head/tail content, and section headings.
-fn compress_tool_result(content: &str) -> String {
+fn compress_tool_result(content: &str, cfg: &crate::config::ContextConfig) -> String {
     let total_lines = content.lines().count();
     let total_chars = content.len();
 
-    if total_chars <= COMPRESS_THRESHOLD_CHARS {
+    if total_chars <= cfg.compress_threshold_chars {
         return content.to_string();
     }
 
     let (pagination_header, bookmark) = extract_pagination_markers(content);
     let inner = strip_pagination(content, &pagination_header);
-    let head = extract_head(inner, COMPRESS_HEAD_CHARS);
-    let tail = extract_tail(inner, &bookmark, COMPRESS_TAIL_CHARS);
+    let head = extract_head(inner, cfg.compress_head_chars);
+    let tail = extract_tail(inner, &bookmark, cfg.compress_tail_chars);
     let headings = extract_middle_headings(inner, head, tail);
 
     build_compressed_output(
@@ -381,8 +379,9 @@ mod tests {
 
     #[test]
     fn test_compress_small_content() {
+        let cfg = crate::config::ContextConfig::default();
         let content = "small content under 8000 chars";
-        assert_eq!(compress_tool_result(content), content);
+        assert_eq!(compress_tool_result(content, &cfg), content);
     }
 
     #[test]
