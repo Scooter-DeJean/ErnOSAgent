@@ -4,6 +4,7 @@
 //! Provider abstraction — trait + factory for model-neutral inference.
 
 pub mod llamacpp;
+pub(crate) mod llamacpp_server_args;
 pub mod llamacpp_embed;
 pub mod ollama;
 pub mod openai_compat;
